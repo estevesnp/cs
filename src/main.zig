@@ -1,50 +1,69 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const Config = struct {};
+
+const Walker = struct {
+    root: []const u8,
+    max_depth: usize = 5,
+    git_projects: std.ArrayListUnmanaged([]const u8) = .empty,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(allocator: Allocator, root: []const u8) Walker {
+        return .{
+            .root = root,
+            .arena = std.heap.ArenaAllocator.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Walker) void {
+        self.arena.deinit();
+    }
+
+    pub fn parseRoot(self: *Walker) ![]const []const u8 {
+        var root_dir = try std.fs.openDirAbsolute(self.root, .{ .iterate = true });
+        defer root_dir.close();
+
+        try self.recurse(root_dir, 0);
+
+        return self.git_projects.items;
+    }
+
+    fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
+        if (depth >= self.max_depth) return;
+        const allocator = self.arena.allocator();
+
+        var iter = dir.iterate();
+        while (try iter.next()) |next| {
+            if (std.mem.eql(u8, next.name, ".git")) {
+                try self.git_projects.append(allocator, try dir.realpathAlloc(allocator, "."));
+                return;
+            }
+
+            if (next.kind != .directory) continue;
+
+            var new = try dir.openDir(next.name, .{ .iterate = true });
+            defer new.close();
+
+            try self.recurse(new, depth + 1);
+        }
+    }
+};
 
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
+    const root = "/home/esteves/proj";
+
     const allocator = gpa.allocator();
 
-    const dirs = try findGitProjects("/home/esteves/proj", allocator);
+    var walker: Walker = .init(allocator, root);
+    defer walker.deinit();
+
+    const dirs = try walker.parseRoot();
 
     for (dirs) |dir| {
         std.debug.print("{s}\n", .{dir});
-        allocator.free(dir);
-    }
-
-    allocator.free(dirs);
-}
-
-fn findGitProjects(root_dir_path: []const u8, allocator: std.mem.Allocator) ![]const []const u8 {
-    var dirs: std.ArrayListUnmanaged([]const u8) = .empty;
-    _ = &dirs;
-
-    var root_dir = try std.fs.openDirAbsolute(root_dir_path, .{ .iterate = true });
-    defer root_dir.close();
-
-    try recurse(root_dir, 0, &dirs, allocator);
-
-    return try dirs.toOwnedSlice(allocator);
-}
-
-fn recurse(dir: std.fs.Dir, depth: u8, dirs: *std.ArrayListUnmanaged([]const u8), allocator: std.mem.Allocator) !void {
-    if (depth >= 3) return;
-
-    var iter = dir.iterate();
-    while (try iter.next()) |next| {
-        if (std.mem.eql(u8, ".git", next.name)) {
-            var buf: [std.fs.max_path_bytes]u8 = undefined;
-            const full_path = try dir.realpath(".", &buf);
-            try dirs.append(allocator, try allocator.dupe(u8, full_path));
-        }
-        if (next.kind != .directory) continue;
-
-        var n = try dir.openDir(next.name, .{ .iterate = true });
-        defer n.close();
-
-        try recurse(n, depth + 1, dirs, allocator);
     }
 }
