@@ -52,12 +52,12 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
     }
 
     for (init_len..self.to_check_stack.items.len) |idx| {
-        const path = self.to_check_stack.items[idx];
-        var new = try dir.openDir(path, .{ .iterate = true });
-        defer new.close();
+        const path_to_check = self.to_check_stack.items[idx];
+        var dir_to_check = try dir.openDir(path_to_check, .{ .iterate = true });
+        defer dir_to_check.close();
 
-        try self.path_stack.append(allocator, path);
-        try self.recurse(new, depth + 1);
+        try self.path_stack.append(allocator, path_to_check);
+        try self.recurse(dir_to_check, depth + 1);
         self.path_stack.items.len -= 1;
     }
 }
