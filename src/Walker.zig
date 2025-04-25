@@ -3,11 +3,13 @@ const Allocator = std.mem.Allocator;
 
 const Walker = @This();
 
+arena: std.heap.ArenaAllocator,
 root: []const u8,
 max_depth: usize = 5,
+
 git_projects: std.ArrayListUnmanaged([]const u8) = .empty,
 path_stack: std.ArrayListUnmanaged([]const u8) = .empty,
-arena: std.heap.ArenaAllocator,
+to_check_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 
 pub fn init(allocator: Allocator, root: []const u8) Walker {
     return .{
@@ -35,8 +37,8 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
     if (depth >= self.max_depth) return;
     const allocator = self.arena.allocator();
 
-    // we check all dirs first to make sure we don't recurse unnecessarily
-    var dirs_to_check: std.ArrayListUnmanaged([]const u8) = .empty;
+    const init_len = self.to_check_stack.items.len;
+    defer self.to_check_stack.items.len = init_len;
 
     var iter = dir.iterate();
     while (try iter.next()) |next| {
@@ -46,14 +48,15 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
         }
 
         if (next.kind != .directory) continue;
-        try dirs_to_check.append(allocator, try allocator.dupe(u8, next.name));
+        try self.to_check_stack.append(allocator, try allocator.dupe(u8, next.name));
     }
 
-    for (dirs_to_check.items) |to_check| {
-        var new = try dir.openDir(to_check, .{ .iterate = true });
+    for (init_len..self.to_check_stack.items.len) |idx| {
+        const path = self.to_check_stack.items[idx];
+        var new = try dir.openDir(path, .{ .iterate = true });
         defer new.close();
 
-        try self.path_stack.append(allocator, to_check);
+        try self.path_stack.append(allocator, path);
         try self.recurse(new, depth + 1);
         self.path_stack.items.len -= 1;
     }
@@ -79,9 +82,9 @@ test "parseRoot" {
 
     const expected_paths: []const []const u8 = &.{
         "git-1",
-        comptime &test_join(&.{ "git-2", "nested" }),
-        comptime &test_join(&.{ "git-3", "nested", "nesteder" }),
-        comptime &test_join(&.{ "git-double", "nested" }),
+        &test_join(&.{ "git-2", "nested" }),
+        &test_join(&.{ "git-3", "nested", "nesteder" }),
+        &test_join(&.{ "git-double", "nested" }),
     };
 
     outer: for (expected_paths) |expected_path| {
