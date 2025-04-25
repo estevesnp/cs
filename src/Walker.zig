@@ -32,6 +32,7 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
     if (depth >= self.max_depth) return;
     const allocator = self.arena.allocator();
 
+    // we check all dirs first to make sure we don't recurse unnecessarily
     var dirs_to_check: std.ArrayListUnmanaged([]const u8) = .empty;
     defer dirs_to_check.deinit(allocator);
 
@@ -43,7 +44,7 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
         }
 
         if (next.kind != .directory) continue;
-        try dirs_to_check.append(allocator, next.name);
+        try dirs_to_check.append(allocator, try allocator.dupe(u8, next.name));
     }
 
     for (dirs_to_check.items) |to_check| {
