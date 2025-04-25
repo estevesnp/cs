@@ -29,25 +29,33 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const test_files: []const []const u8 = &.{ "src/main.zig", "src/Walker.zig" };
+    // tests
+    {
+        const test_files: []const []const u8 = &.{
+            "src/main.zig",
+            "src/Walker.zig",
+        };
 
-    const test_step = b.step("test", "Run unit tests");
+        const test_step = b.step("test", "Run unit tests");
+        for (test_files) |test_file| {
+            const unit_test = b.addTest(.{
+                .root_source_file = b.path(test_file),
+            });
 
-    for (test_files) |test_file| {
-        const exe_unit_tests = b.addTest(.{
-            .root_source_file = b.path(test_file),
-        });
+            const run_exe_unit_tests = b.addRunArtifact(unit_test);
 
-        const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-        test_step.dependOn(&run_exe_unit_tests.step);
+            test_step.dependOn(&run_exe_unit_tests.step);
+        }
     }
 
-    const check_exe = b.addExecutable(.{
-        .name = "cs",
-        .root_module = exe_mod,
-    });
+    // check
+    {
+        const check_exe = b.addExecutable(.{
+            .name = "cs",
+            .root_module = exe_mod,
+        });
 
-    const check_step = b.step("check", "Check if app compiles");
-    check_step.dependOn(&check_exe.step);
+        const check_step = b.step("check", "Check if app compiles");
+        check_step.dependOn(&check_exe.step);
+    }
 }
