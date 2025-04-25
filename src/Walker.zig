@@ -65,7 +65,7 @@ test "parseRoot" {
     var root = std.testing.tmpDir(.{ .iterate = true });
     defer root.cleanup();
 
-    const root_path = try root.parent_dir.realpathAlloc(allocator, ".");
+    const root_path = try root.dir.realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
 
     try test_setupDirs(root.dir);
