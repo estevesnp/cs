@@ -6,6 +6,7 @@ const Walker = @This();
 root: []const u8,
 max_depth: usize = 5,
 git_projects: std.ArrayListUnmanaged([]const u8) = .empty,
+path_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 arena: std.heap.ArenaAllocator,
 
 pub fn init(allocator: Allocator, root: []const u8) Walker {
@@ -20,6 +21,8 @@ pub fn deinit(self: *Walker) void {
 }
 
 pub fn parseRoot(self: *Walker) ![]const []const u8 {
+    try self.path_stack.append(self.arena.allocator(), self.root);
+
     var root_dir = try std.fs.openDirAbsolute(self.root, .{ .iterate = true });
     defer root_dir.close();
 
@@ -34,12 +37,11 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
 
     // we check all dirs first to make sure we don't recurse unnecessarily
     var dirs_to_check: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer dirs_to_check.deinit(allocator);
 
     var iter = dir.iterate();
     while (try iter.next()) |next| {
         if (std.mem.eql(u8, next.name, ".git")) {
-            try self.git_projects.append(allocator, try dir.realpathAlloc(allocator, "."));
+            try self.git_projects.append(allocator, try std.fs.path.join(allocator, self.path_stack.items));
             return;
         }
 
@@ -51,7 +53,9 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
         var new = try dir.openDir(to_check, .{ .iterate = true });
         defer new.close();
 
+        try self.path_stack.append(allocator, to_check);
         try self.recurse(new, depth + 1);
+        self.path_stack.items.len -= 1;
     }
 }
 
