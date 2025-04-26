@@ -65,6 +65,10 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
     }
 }
 
+test "ref all decls" {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
 test "parseRoot" {
     const allocator = std.testing.allocator;
 

@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
         const test_files: []const []const u8 = &.{
             "src/main.zig",
             "src/Walker.zig",
+            "src/config.zig",
         };
 
         const test_step = b.step("test", "Run unit tests");
