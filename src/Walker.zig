@@ -4,16 +4,16 @@ const Allocator = std.mem.Allocator;
 const Walker = @This();
 
 arena: std.heap.ArenaAllocator,
-root: []const u8,
+roots: []const []const u8,
 max_depth: usize = 5,
 
 git_projects: std.ArrayListUnmanaged([]const u8) = .empty,
 path_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 to_check_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 
-pub fn init(allocator: Allocator, root: []const u8) Walker {
+pub fn init(allocator: Allocator, roots: []const []const u8) Walker {
     return .{
-        .root = root,
+        .roots = roots,
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
 }
@@ -22,13 +22,16 @@ pub fn deinit(self: *Walker) void {
     self.arena.deinit();
 }
 
-pub fn parseRoot(self: *Walker) ![]const []const u8 {
-    try self.path_stack.append(self.arena.allocator(), self.root);
+pub fn parseRoots(self: *Walker) ![]const []const u8 {
+    for (self.roots) |root| {
+        try self.path_stack.append(self.arena.allocator(), root);
+        defer self.path_stack.clearRetainingCapacity();
 
-    var root_dir = try std.fs.openDirAbsolute(self.root, .{ .iterate = true });
-    defer root_dir.close();
+        var root_dir = try std.fs.openDirAbsolute(root, .{ .iterate = true });
+        defer root_dir.close();
 
-    try self.recurse(root_dir, 0);
+        try self.recurse(root_dir, 0);
+    }
 
     return self.git_projects.items;
 }
@@ -65,20 +68,27 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
 test "parseRoot" {
     const allocator = std.testing.allocator;
 
-    var root = std.testing.tmpDir(.{ .iterate = true });
-    defer root.cleanup();
+    var root_1 = std.testing.tmpDir(.{ .iterate = true });
+    defer root_1.cleanup();
 
-    const root_path = try root.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(root_path);
+    const root_1_path = try root_1.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root_1_path);
 
-    try test_setupDirs(root.dir);
+    var root_2 = std.testing.tmpDir(.{ .iterate = true });
+    defer root_2.cleanup();
 
-    var walker: Walker = .init(allocator, root_path);
+    const root_2_path = try root_2.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root_2_path);
+
+    try test_setupDirs(root_1.dir);
+    try test_setupDirs(root_2.dir);
+
+    var walker: Walker = .init(allocator, &.{ root_1_path, root_2_path });
     defer walker.deinit();
 
-    const paths = try walker.parseRoot();
+    const git_paths = try walker.parseRoots();
 
-    try std.testing.expectEqual(4, paths.len);
+    try std.testing.expectEqual(8, git_paths.len);
 
     const expected_paths: []const []const u8 = &.{
         "git-1",
@@ -87,11 +97,16 @@ test "parseRoot" {
         &test_join(&.{ "git-double", "nested" }),
     };
 
-    outer: for (expected_paths) |expected_path| {
-        for (paths) |path| {
-            if (std.mem.endsWith(u8, path, expected_path)) continue :outer;
+    for (@as([]const []const u8, &.{ root_1_path, root_2_path })) |path| {
+        outer: for (expected_paths) |expected_path| {
+            const full_path = try std.fs.path.join(allocator, &.{ path, expected_path });
+            defer allocator.free(full_path);
+
+            for (git_paths) |git_path| {
+                if (std.mem.eql(u8, git_path, full_path)) continue :outer;
+            }
+            return error.NotFound;
         }
-        return error.NotFound;
     }
 }
 

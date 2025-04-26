@@ -10,22 +10,14 @@ pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
-    try run(gpa.allocator(), "/home/esteves/proj");
+    try run(gpa.allocator(), &.{ "/home/esteves/proj", "/home/esteves/tmp" });
 }
 
-fn run(allocator: Allocator, root: []const u8) !void {
-    var walker: Walker = .init(allocator, root);
+fn run(allocator: Allocator, roots: []const []const u8) !void {
+    var walker: Walker = .init(allocator, roots);
     defer walker.deinit();
 
-    const dirs = walker.parseRoot() catch |err| {
-        switch (err) {
-            error.FileNotFound => {
-                try stderr.print("source dir not found: {s}\n", .{root});
-                std.process.exit(1);
-            },
-            else => return err,
-        }
-    };
+    const dirs = try walker.parseRoots();
 
     var out: std.ArrayListUnmanaged(u8) = .empty;
     defer out.deinit(allocator);
