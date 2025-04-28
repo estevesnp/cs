@@ -1,14 +1,20 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 pub const Options = struct {
-    roots: ?[]const []const u8 = null,
     config_path: ?[]const u8 = null,
+    roots: ?[]const []const u8 = null,
 
-    const empty: Options = .{ .roots = null, .config_path = null };
+    const empty: Options = .{ .config_path = null, .roots = null };
 
-    pub fn deinit(self: *Options, allocator: std.mem.Allocator) void {
-        if (self.roots) |roots| allocator.free(roots);
+    pub fn deinit(self: *Options, allocator: Allocator) void {
         if (self.config_path) |cfg| allocator.free(cfg);
+        if (self.roots) |roots| {
+            for (roots) |root| {
+                allocator.free(root);
+            }
+            allocator.free(roots);
+        }
     }
 };
 
@@ -18,12 +24,17 @@ pub const Diag = struct {
 
     pub const empty: Diag = .{ .msg = null, .owns_mem = false };
 
-    pub fn register(self: *Diag, allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
+    pub fn register(
+        self: *Diag,
+        allocator: Allocator,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) !void {
         self.msg = try std.fmt.allocPrint(allocator, fmt, args);
         self.owns_mem = true;
     }
 
-    pub fn deinit(self: *Diag, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Diag, allocator: Allocator) void {
         if (self.owns_mem) {
             allocator.free(self.msg.?);
         }
@@ -68,7 +79,7 @@ const Flag = union(enum) {
 
         fn handleArgs(
             self: @This(),
-            allocator: std.mem.Allocator,
+            allocator: Allocator,
             opts: *Options,
             args_iter: *Iterator([]const u8),
             diag: ?*Diag,
@@ -102,7 +113,7 @@ const Flag = union(enum) {
 
         fn handleArgs(
             self: @This(),
-            allocator: std.mem.Allocator,
+            allocator: Allocator,
             opts: *Options,
             args_iter: *Iterator([]const u8),
             diag: ?*Diag,
@@ -115,7 +126,7 @@ const Flag = union(enum) {
             while (args_iter.peek()) |arg| {
                 if (isFlagArgument(arg)) break;
 
-                try paths.append(allocator, arg);
+                try paths.append(allocator, try allocator.dupe(u8, arg));
                 _ = args_iter.next();
             }
 
@@ -135,7 +146,7 @@ const Flag = union(enum) {
 
     fn handleArgs(
         self: Flag,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         opts: *Options,
         args_iter: *Iterator([]const u8),
         diag: ?*Diag,
@@ -157,7 +168,7 @@ const Flag = union(enum) {
     }
 };
 
-pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8, diag: ?*Diag) !Options {
+pub fn parseArgs(allocator: Allocator, args: []const []const u8, diag: ?*Diag) !Options {
     var iter: Iterator([]const u8) = .init(args);
 
     var opts: Options = .empty;

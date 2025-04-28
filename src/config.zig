@@ -3,6 +3,7 @@ const json = std.json;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const os_tag = builtin.os.tag;
 
 pub const Config = struct {
     roots: []const []const u8,
@@ -10,7 +11,6 @@ pub const Config = struct {
 
 const stderr = std.io.getStdErr().writer();
 
-const os_tag = builtin.os.tag;
 const APP_CFG_DIR = "cs";
 const APP_CFG_FILE = "config.json";
 
