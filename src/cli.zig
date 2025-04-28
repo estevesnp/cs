@@ -50,8 +50,105 @@ fn Iterator(T: type) type {
             self.pos += 1;
             return item;
         }
+
+        fn peek(self: *Self) ?T {
+            if (self.pos >= self.slice.len) return null;
+            return self.slice[self.pos];
+        }
     };
 }
+
+const Flag = union(enum) {
+    pub const Config = struct {
+        const flags: []const []const u8 = &.{ "-c", "--config" };
+
+        fn asFlag() Flag {
+            return .{ .config = .{} };
+        }
+
+        fn handleArgs(
+            self: @This(),
+            allocator: std.mem.Allocator,
+            opts: *Options,
+            args_iter: *Iterator([]const u8),
+            diag: ?*Diag,
+        ) !void {
+            _ = self;
+
+            const cfg_path = args_iter.next() orelse {
+                if (diag) |d| {
+                    d.msg = "no config path provided after the -c/--config flag";
+                }
+                return error.MissingArgument;
+            };
+
+            opts.config_path = try allocator.dupe(u8, cfg_path);
+        }
+    };
+
+    pub const Paths = struct {
+        const flags: []const []const u8 = &.{ "-p", "--paths" };
+
+        fn asFlag() Flag {
+            return .{ .paths = .{} };
+        }
+
+        fn handleArgs(
+            self: @This(),
+            allocator: std.mem.Allocator,
+            opts: *Options,
+            args_iter: *Iterator([]const u8),
+            diag: ?*Diag,
+        ) !void {
+            _ = self;
+
+            var paths: std.ArrayListUnmanaged([]const u8) = .empty;
+            defer paths.deinit(allocator);
+
+            while (args_iter.peek()) |arg| {
+                if (std.mem.startsWith(u8, arg, "-")) break;
+
+                try paths.append(allocator, arg);
+                _ = args_iter.next();
+            }
+
+            if (paths.items.len == 0) {
+                if (diag) |d| {
+                    d.msg = "no paths provided to the -p/--paths flag";
+                }
+                return error.MissingArgument;
+            }
+
+            opts.roots = try paths.toOwnedSlice(allocator);
+        }
+    };
+
+    config: Config,
+    paths: Paths,
+
+    fn handleArgs(
+        self: Flag,
+        allocator: std.mem.Allocator,
+        opts: *Options,
+        args_iter: *Iterator([]const u8),
+        diag: ?*Diag,
+    ) !void {
+        switch (self) {
+            inline else => |f| return f.handleArgs(allocator, opts, args_iter, diag),
+        }
+    }
+
+    fn fromArg(flag: []const u8) !Flag {
+        inline for (@typeInfo(Flag).@"union".decls) |decl| {
+            const flagType = @field(Flag, decl.name);
+            if (contains(flag, flagType.flags)) {
+                return flagType.asFlag();
+            }
+        }
+
+        return error.IllegalArgument;
+    }
+};
 
 pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8, diag: ?*Diag) !Options {
     var iter: Iterator([]const u8) = .init(args);
@@ -59,82 +156,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8, diag: ?
     var opts: Options = .empty;
     errdefer opts.deinit(allocator);
 
+    // discard program name
     _ = iter.next();
 
     while (iter.next()) |arg| {
-        var found_flag = false;
-
-        if (isPathsFlag(arg)) {
-            try handlePaths(allocator, &opts, &iter, diag);
-            found_flag = true;
-        }
-
-        if (isConfigFlag(arg)) {
-            try handleConfig(allocator, &opts, &iter, diag);
-            found_flag = true;
-        }
-
-        if (found_flag) continue;
-
-        if (diag) |d| {
-            try d.register(allocator, "illegal argument: {s}", .{arg});
-        }
-        return error.IllegalArgument;
+        const flag: Flag = try .fromArg(arg);
+        try flag.handleArgs(allocator, &opts, &iter, diag);
     }
 
     return opts;
-}
-
-fn handlePaths(
-    allocator: std.mem.Allocator,
-    opts: *Options,
-    args_iter: *Iterator([]const u8),
-    diag: ?*Diag,
-) !void {
-    var paths: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer paths.deinit(allocator);
-
-    while (args_iter.next()) |inner_arg| {
-        if (isConfigFlag(inner_arg)) {
-            try handleConfig(allocator, opts, args_iter, diag);
-            break;
-        }
-
-        try paths.append(allocator, inner_arg);
-    }
-
-    if (paths.items.len == 0) {
-        if (diag) |d| {
-            d.msg = "no paths provided to the -p/--prefix flag";
-        }
-        return error.MissingArgument;
-    }
-
-    opts.roots = try paths.toOwnedSlice(allocator);
-}
-
-fn handleConfig(
-    allocator: std.mem.Allocator,
-    opts: *Options,
-    args_iter: *Iterator([]const u8),
-    diag: ?*Diag,
-) !void {
-    const cfg_path = args_iter.next() orelse {
-        if (diag) |d| {
-            d.msg = "no config path provided after the -c/--config flag";
-        }
-        return error.MissingArgument;
-    };
-
-    opts.config_path = try allocator.dupe(u8, cfg_path);
-}
-
-fn isPathsFlag(arg: []const u8) bool {
-    return contains(arg, &.{ "-p", "--path" });
-}
-
-fn isConfigFlag(arg: []const u8) bool {
-    return contains(arg, &.{ "-c", "--config" });
 }
 
 fn contains(needle: []const u8, haystack: []const []const u8) bool {
@@ -175,7 +205,7 @@ test Iterator {
     }
 }
 
-test handleConfig {
+test "handle config" {
     var opts: Options = .empty;
     defer opts.deinit(std.testing.allocator);
 
@@ -184,7 +214,7 @@ test handleConfig {
 
     var iter: Iterator([]const u8) = .init(&.{"/tmp/1"});
 
-    try handleConfig(std.testing.allocator, &opts, &iter, &diag);
+    try Flag.Config.asFlag().handleArgs(std.testing.allocator, &opts, &iter, &diag);
 
     try std.testing.expectEqual(null, diag.msg);
 
@@ -192,7 +222,7 @@ test handleConfig {
     try std.testing.expectEqualStrings("/tmp/1", opts.config_path.?);
 }
 
-test "handleConfig no args" {
+test "handle config no args" {
     var opts: Options = .empty;
     defer opts.deinit(std.testing.allocator);
 
@@ -203,7 +233,7 @@ test "handleConfig no args" {
 
     try std.testing.expectError(
         error.MissingArgument,
-        handleConfig(std.testing.allocator, &opts, &iter, &diag),
+        Flag.Config.asFlag().handleArgs(std.testing.allocator, &opts, &iter, &diag),
     );
 
     try std.testing.expectEqualStrings(
@@ -212,7 +242,7 @@ test "handleConfig no args" {
     );
 }
 
-test handlePaths {
+test "handle paths" {
     var opts: Options = .empty;
     defer opts.deinit(std.testing.allocator);
 
@@ -221,7 +251,7 @@ test handlePaths {
 
     var iter: Iterator([]const u8) = .init(&.{ "/tmp/1", "/tmp/2" });
 
-    try handlePaths(std.testing.allocator, &opts, &iter, &diag);
+    try Flag.Paths.asFlag().handleArgs(std.testing.allocator, &opts, &iter, &diag);
 
     try std.testing.expectEqual(null, diag.msg);
 
@@ -231,7 +261,7 @@ test handlePaths {
     try std.testing.expectEqualStrings("/tmp/2", opts.roots.?[1]);
 }
 
-test "handlePaths no args" {
+test "handle paths no args" {
     var opts: Options = .empty;
     defer opts.deinit(std.testing.allocator);
 
@@ -242,11 +272,11 @@ test "handlePaths no args" {
 
     try std.testing.expectError(
         error.MissingArgument,
-        handlePaths(std.testing.allocator, &opts, &iter, &diag),
+        Flag.Paths.asFlag().handleArgs(std.testing.allocator, &opts, &iter, &diag),
     );
 
     try std.testing.expectEqualStrings(
-        "no paths provided to the -p/--prefix flag",
+        "no paths provided to the -p/--paths flag",
         diag.msg.?,
     );
 }
