@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const json = std.json;
 
+const cli = @import("cli.zig");
 const config = @import("config.zig");
 const Config = config.Config;
 const Walker = @import("Walker.zig");
@@ -15,9 +16,24 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
+    var diag: cli.Diag = .empty;
+    defer diag.deinit(allocator);
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    var opts = cli.parseArgs(allocator, args, &diag) catch |err| {
+        if (diag.msg) |msg| {
+            try stderr.print("error parsing args: {s}\n", .{msg});
+        }
+        return err;
+    };
+    defer opts.deinit(allocator);
+
+    printOpts(opts);
+
     const cfg = try getConfig(allocator);
     defer cfg.deinit();
-
     try run(allocator, cfg.value);
 }
 
@@ -35,6 +51,19 @@ fn getConfig(allocator: Allocator) !json.Parsed(Config) {
     defer cfg_file.close();
 
     return config.parseConfig(allocator, cfg_file);
+}
+
+fn printOpts(opts: cli.Options) void {
+    if (opts.config_path) |cfg_p| {
+        std.debug.print("config path: {s}\n", .{cfg_p});
+    }
+
+    if (opts.roots) |roots| {
+        std.debug.print("roots:\n", .{});
+        for (roots) |root| {
+            std.debug.print("\t{s}\n", .{root});
+        }
+    }
 }
 
 fn run(allocator: Allocator, cfg: Config) !void {
