@@ -31,22 +31,10 @@ pub fn build(b: *std.Build) void {
 
     // tests
     {
-        const test_files: []const []const u8 = &.{
-            "src/main.zig",
-            "src/Walker.zig",
-            "src/config.zig",
-        };
-
         const test_step = b.step("test", "Run unit tests");
-        for (test_files) |test_file| {
-            const unit_test = b.addTest(.{
-                .root_source_file = b.path(test_file),
-            });
 
-            const run_exe_unit_tests = b.addRunArtifact(unit_test);
-
-            test_step.dependOn(&run_exe_unit_tests.step);
-        }
+        registerTests(b, test_step) catch |err|
+            std.debug.panic("error registering tests: {s}", .{@errorName(err)});
     }
 
     // check
@@ -58,5 +46,24 @@ pub fn build(b: *std.Build) void {
 
         const check_step = b.step("check", "Check if app compiles");
         check_step.dependOn(&check_exe.step);
+    }
+}
+
+fn registerTests(b: *std.Build, test_step: *std.Build.Step) !void {
+    var src_dir = try std.fs.cwd().openDir("src", .{ .iterate = true });
+    defer src_dir.close();
+
+    var walker = try src_dir.walk(b.allocator);
+    defer walker.deinit();
+
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+        const unit_test = b.addTest(.{
+            .root_source_file = b.path(b.pathJoin(&.{ "src", entry.path })),
+        });
+
+        const run_exe_unit_tests = b.addRunArtifact(unit_test);
+
+        test_step.dependOn(&run_exe_unit_tests.step);
     }
 }

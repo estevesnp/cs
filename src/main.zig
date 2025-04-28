@@ -15,33 +15,26 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    const cfg_path = try config.getConfigPath(allocator);
-    defer allocator.free(cfg_path);
-
-    const cfg = try parseConfig(allocator, cfg_path);
+    const cfg = try getConfig(allocator);
     defer cfg.deinit();
 
     try run(allocator, cfg.value);
 }
 
-fn parseConfig(allocator: Allocator, cfg_path: []const u8) !json.Parsed(Config) {
-    var cfg_file = std.fs.openFileAbsolute(cfg_path, .{}) catch |err| switch (err) {
+fn getConfig(allocator: Allocator) !json.Parsed(Config) {
+    const cfg_path = try config.getConfigPath(allocator);
+    defer allocator.free(cfg_path);
+
+    const cfg_file = std.fs.openFileAbsolute(cfg_path, .{}) catch |err| switch (err) {
         error.FileNotFound => {
             try stderr.print("config file not found. please create one at {s}\n", .{cfg_path});
             std.process.exit(1);
         },
         else => return err,
     };
-
     defer cfg_file.close();
 
-    const file_size = try cfg_file.getEndPos();
-    const file_buf = try allocator.alloc(u8, file_size);
-    defer allocator.free(file_buf);
-
-    _ = try cfg_file.readAll(file_buf);
-
-    return try json.parseFromSlice(Config, allocator, file_buf, .{ .allocate = .alloc_always });
+    return config.parseConfig(allocator, cfg_file);
 }
 
 fn run(allocator: Allocator, cfg: Config) !void {
