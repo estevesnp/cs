@@ -82,6 +82,13 @@ const Flag = union(enum) {
                 return error.MissingArgument;
             };
 
+            if (isFlagArgument(cfg_path)) {
+                if (diag) |d| {
+                    try d.register(allocator, "illegal argument after the -c/--config flag: {s}", .{cfg_path});
+                }
+                return error.IllegalArgument;
+            }
+
             opts.config_path = try allocator.dupe(u8, cfg_path);
         }
     };
@@ -106,7 +113,7 @@ const Flag = union(enum) {
             defer paths.deinit(allocator);
 
             while (args_iter.peek()) |arg| {
-                if (std.mem.startsWith(u8, arg, "-")) break;
+                if (isFlagArgument(arg)) break;
 
                 try paths.append(allocator, arg);
                 _ = args_iter.next();
@@ -160,7 +167,12 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8, diag: ?
     _ = iter.next();
 
     while (iter.next()) |arg| {
-        const flag: Flag = try .fromArg(arg);
+        const flag = Flag.fromArg(arg) catch |err| {
+            if (diag) |d| {
+                try d.register(allocator, "illegal argument: {s}", .{arg});
+            }
+            return err;
+        };
         try flag.handleArgs(allocator, &opts, &iter, diag);
     }
 
@@ -174,6 +186,10 @@ fn contains(needle: []const u8, haystack: []const []const u8) bool {
     return false;
 }
 
+fn isFlagArgument(arg: []const u8) bool {
+    return std.mem.startsWith(u8, arg, "-");
+}
+
 test "ref all decls" {
     std.testing.refAllDeclsRecursive(@This());
 }
@@ -182,9 +198,19 @@ test Iterator {
     {
         var iter = Iterator(u8).init(&.{ 1, 2, 3 });
 
+        try std.testing.expectEqual(iter.peek(), 1);
+        try std.testing.expectEqual(iter.peek(), 1);
         try std.testing.expectEqual(iter.next(), 1);
+
+        try std.testing.expectEqual(iter.peek(), 2);
+        try std.testing.expectEqual(iter.peek(), 2);
         try std.testing.expectEqual(iter.next(), 2);
+
+        try std.testing.expectEqual(iter.peek(), 3);
+        try std.testing.expectEqual(iter.peek(), 3);
         try std.testing.expectEqual(iter.next(), 3);
+
+        try std.testing.expectEqual(iter.peek(), null);
         try std.testing.expectEqual(iter.next(), null);
         try std.testing.expectEqual(iter.next(), null);
     }
@@ -192,7 +218,11 @@ test Iterator {
     {
         var iter = Iterator(u8).init(&.{1});
 
+        try std.testing.expectEqual(iter.peek(), 1);
+        try std.testing.expectEqual(iter.peek(), 1);
         try std.testing.expectEqual(iter.next(), 1);
+
+        try std.testing.expectEqual(iter.peek(), null);
         try std.testing.expectEqual(iter.next(), null);
         try std.testing.expectEqual(iter.next(), null);
     }
@@ -200,6 +230,7 @@ test Iterator {
     {
         var iter = Iterator(u8).init(&.{});
 
+        try std.testing.expectEqual(iter.peek(), null);
         try std.testing.expectEqual(iter.next(), null);
         try std.testing.expectEqual(iter.next(), null);
     }
@@ -242,6 +273,26 @@ test "handle config no args" {
     );
 }
 
+test "handle config path args" {
+    var opts: Options = .empty;
+    defer opts.deinit(std.testing.allocator);
+
+    var diag: Diag = .empty;
+    defer diag.deinit(std.testing.allocator);
+
+    var iter: Iterator([]const u8) = .init(&.{ "-p", "/tmp/1" });
+
+    try std.testing.expectError(
+        error.IllegalArgument,
+        Flag.Config.asFlag().handleArgs(std.testing.allocator, &opts, &iter, &diag),
+    );
+
+    try std.testing.expectEqualStrings(
+        "illegal argument after the -c/--config flag: -p",
+        diag.msg.?,
+    );
+}
+
 test "handle paths" {
     var opts: Options = .empty;
     defer opts.deinit(std.testing.allocator);
@@ -250,6 +301,43 @@ test "handle paths" {
     defer diag.deinit(std.testing.allocator);
 
     var iter: Iterator([]const u8) = .init(&.{ "/tmp/1", "/tmp/2" });
+
+    try Flag.Paths.asFlag().handleArgs(std.testing.allocator, &opts, &iter, &diag);
+
+    try std.testing.expectEqual(null, diag.msg);
+
+    try std.testing.expectEqual(null, opts.config_path);
+    try std.testing.expectEqual(2, opts.roots.?.len);
+    try std.testing.expectEqualStrings("/tmp/1", opts.roots.?[0]);
+    try std.testing.expectEqualStrings("/tmp/2", opts.roots.?[1]);
+}
+
+test "handle paths one arg" {
+    var opts: Options = .empty;
+    defer opts.deinit(std.testing.allocator);
+
+    var diag: Diag = .empty;
+    defer diag.deinit(std.testing.allocator);
+
+    var iter: Iterator([]const u8) = .init(&.{"/tmp/1"});
+
+    try Flag.Paths.asFlag().handleArgs(std.testing.allocator, &opts, &iter, &diag);
+
+    try std.testing.expectEqual(null, diag.msg);
+
+    try std.testing.expectEqual(null, opts.config_path);
+    try std.testing.expectEqual(1, opts.roots.?.len);
+    try std.testing.expectEqualStrings("/tmp/1", opts.roots.?[0]);
+}
+
+test "handle paths with flag args" {
+    var opts: Options = .empty;
+    defer opts.deinit(std.testing.allocator);
+
+    var diag: Diag = .empty;
+    defer diag.deinit(std.testing.allocator);
+
+    var iter: Iterator([]const u8) = .init(&.{ "/tmp/1", "/tmp/2", "--config", "/tmp/3" });
 
     try Flag.Paths.asFlag().handleArgs(std.testing.allocator, &opts, &iter, &diag);
 
@@ -279,4 +367,263 @@ test "handle paths no args" {
         "no paths provided to the -p/--paths flag",
         diag.msg.?,
     );
+}
+
+test "handle paths no path args with flag arg" {
+    var opts: Options = .empty;
+    defer opts.deinit(std.testing.allocator);
+
+    var diag: Diag = .empty;
+    defer diag.deinit(std.testing.allocator);
+
+    var iter: Iterator([]const u8) = .init(&.{ "--config", "/tmp/3" });
+
+    try std.testing.expectError(
+        error.MissingArgument,
+        Flag.Paths.asFlag().handleArgs(std.testing.allocator, &opts, &iter, &diag),
+    );
+
+    try std.testing.expectEqualStrings(
+        "no paths provided to the -p/--paths flag",
+        diag.msg.?,
+    );
+}
+
+test parseArgs {
+    // config and paths
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--config",
+            "/tmp/1",
+            "--paths",
+            "/tmp/2",
+            "/tmp/3",
+        };
+
+        var opts = try parseArgs(std.testing.allocator, args, &diag);
+        defer opts.deinit(std.testing.allocator);
+
+        try std.testing.expectEqual(null, diag.msg);
+
+        try std.testing.expectEqualStrings("/tmp/1", opts.config_path.?);
+        try std.testing.expectEqual(2, opts.roots.?.len);
+        try std.testing.expectEqualStrings("/tmp/2", opts.roots.?[0]);
+        try std.testing.expectEqualStrings("/tmp/3", opts.roots.?[1]);
+    }
+
+    // paths and config
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--paths",
+            "/tmp/1",
+            "/tmp/2",
+            "--config",
+            "/tmp/3",
+        };
+
+        var opts = try parseArgs(std.testing.allocator, args, &diag);
+        defer opts.deinit(std.testing.allocator);
+
+        try std.testing.expectEqual(null, diag.msg);
+
+        try std.testing.expectEqualStrings("/tmp/3", opts.config_path.?);
+        try std.testing.expectEqual(2, opts.roots.?.len);
+        try std.testing.expectEqualStrings("/tmp/1", opts.roots.?[0]);
+        try std.testing.expectEqualStrings("/tmp/2", opts.roots.?[1]);
+    }
+
+    // config
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--config",
+            "/tmp/1",
+        };
+
+        var opts = try parseArgs(std.testing.allocator, args, &diag);
+        defer opts.deinit(std.testing.allocator);
+
+        try std.testing.expectEqual(null, diag.msg);
+
+        try std.testing.expectEqualStrings("/tmp/1", opts.config_path.?);
+        try std.testing.expectEqual(null, opts.roots);
+    }
+
+    // paths
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--paths",
+            "/tmp/1",
+            "/tmp/2",
+        };
+
+        var opts = try parseArgs(std.testing.allocator, args, &diag);
+        defer opts.deinit(std.testing.allocator);
+
+        try std.testing.expectEqual(null, diag.msg);
+
+        try std.testing.expectEqual(2, opts.roots.?.len);
+        try std.testing.expectEqualStrings("/tmp/1", opts.roots.?[0]);
+        try std.testing.expectEqualStrings("/tmp/2", opts.roots.?[1]);
+        try std.testing.expectEqual(null, opts.config_path);
+    }
+}
+
+test "parseArgs fails" {
+    // no config, paths
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--config",
+            "--paths",
+            "/tmp/1",
+            "/tmp/2",
+        };
+
+        try std.testing.expectError(
+            error.IllegalArgument,
+            parseArgs(std.testing.allocator, args, &diag),
+        );
+
+        try std.testing.expectEqualStrings(
+            "illegal argument after the -c/--config flag: --paths",
+            diag.msg.?,
+        );
+    }
+
+    // no paths, config
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--paths",
+            "--config",
+            "/tmp/1",
+        };
+
+        try std.testing.expectError(
+            error.MissingArgument,
+            parseArgs(std.testing.allocator, args, &diag),
+        );
+
+        try std.testing.expectEqualStrings(
+            "no paths provided to the -p/--paths flag",
+            diag.msg.?,
+        );
+    }
+
+    // paths, no config
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--paths",
+            "/tmp/1",
+            "/tmp/2",
+            "--config",
+        };
+
+        try std.testing.expectError(
+            error.MissingArgument,
+            parseArgs(std.testing.allocator, args, &diag),
+        );
+
+        try std.testing.expectEqualStrings(
+            "no config path provided after the -c/--config flag",
+            diag.msg.?,
+        );
+    }
+
+    // config, no paths
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--config",
+            "/tmp/1",
+            "--paths",
+        };
+
+        try std.testing.expectError(
+            error.MissingArgument,
+            parseArgs(std.testing.allocator, args, &diag),
+        );
+
+        try std.testing.expectEqualStrings(
+            "no paths provided to the -p/--paths flag",
+            diag.msg.?,
+        );
+    }
+
+    // multiple config args
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--config",
+            "/tmp/1",
+            "/tmp/2",
+        };
+
+        try std.testing.expectError(
+            error.IllegalArgument,
+            parseArgs(std.testing.allocator, args, &diag),
+        );
+
+        try std.testing.expectEqualStrings(
+            "illegal argument: /tmp/2",
+            diag.msg.?,
+        );
+    }
+
+    // path args, multiple config args
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--paths",
+            "/tmp/1",
+            "--config",
+            "/tmp/2",
+            "/tmp/3",
+        };
+
+        try std.testing.expectError(
+            error.IllegalArgument,
+            parseArgs(std.testing.allocator, args, &diag),
+        );
+
+        try std.testing.expectEqualStrings(
+            "illegal argument: /tmp/3",
+            diag.msg.?,
+        );
+    }
 }
