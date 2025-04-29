@@ -221,7 +221,8 @@ fn contains(needle: []const u8, haystack: []const []const u8) bool {
 }
 
 fn isFlagArgument(arg: []const u8) bool {
-    return std.mem.startsWith(u8, arg, "-");
+    if (arg.len == 0) return false;
+    return arg[0] == '-';
 }
 
 test "ref all decls" {
