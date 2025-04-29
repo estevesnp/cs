@@ -70,6 +70,13 @@ fn Iterator(T: type) type {
 }
 
 const Flag = union(enum) {
+    pub const Error = error{
+        RepeatedFlag,
+        MissingArgument,
+        IllegalArgument,
+        OutOfMemory,
+    };
+
     pub const Config = struct {
         const flags: []const []const u8 = &.{ "-c", "--config" };
 
@@ -83,21 +90,28 @@ const Flag = union(enum) {
             opts: *Options,
             args_iter: *Iterator([]const u8),
             diag: ?*Diag,
-        ) !void {
+        ) Error!void {
             _ = self;
+
+            if (opts.config_path != null) {
+                if (diag) |d| {
+                    d.msg = "the -c/--config flag is present more than once";
+                }
+                return Error.RepeatedFlag;
+            }
 
             const cfg_path = args_iter.next() orelse {
                 if (diag) |d| {
                     d.msg = "no config path provided after the -c/--config flag";
                 }
-                return error.MissingArgument;
+                return Error.MissingArgument;
             };
 
             if (isFlagArgument(cfg_path)) {
                 if (diag) |d| {
                     try d.register(allocator, "illegal argument after the -c/--config flag: {s}", .{cfg_path});
                 }
-                return error.IllegalArgument;
+                return Error.IllegalArgument;
             }
 
             opts.config_path = try allocator.dupe(u8, cfg_path);
@@ -117,8 +131,15 @@ const Flag = union(enum) {
             opts: *Options,
             args_iter: *Iterator([]const u8),
             diag: ?*Diag,
-        ) !void {
+        ) Error!void {
             _ = self;
+
+            if (opts.roots != null) {
+                if (diag) |d| {
+                    d.msg = "the -p/--paths flag is present more than once";
+                }
+                return Error.RepeatedFlag;
+            }
 
             var paths: std.ArrayListUnmanaged([]const u8) = .empty;
             defer paths.deinit(allocator);
@@ -134,7 +155,7 @@ const Flag = union(enum) {
                 if (diag) |d| {
                     d.msg = "no paths provided to the -p/--paths flag";
                 }
-                return error.MissingArgument;
+                return Error.MissingArgument;
             }
 
             opts.roots = try paths.toOwnedSlice(allocator);
@@ -150,21 +171,23 @@ const Flag = union(enum) {
         opts: *Options,
         args_iter: *Iterator([]const u8),
         diag: ?*Diag,
-    ) !void {
+    ) Error!void {
         switch (self) {
             inline else => |f| return f.handleArgs(allocator, opts, args_iter, diag),
         }
     }
 
-    fn fromArg(flag: []const u8) !Flag {
+    fn fromArg(flag: []const u8) Error!Flag {
         inline for (@typeInfo(Flag).@"union".decls) |decl| {
+            if (comptime std.mem.eql(u8, decl.name, "Error")) continue;
+
             const flagType = @field(Flag, decl.name);
             if (contains(flag, flagType.flags)) {
                 return flagType.asFlag();
             }
         }
 
-        return error.IllegalArgument;
+        return Error.IllegalArgument;
     }
 };
 
@@ -634,6 +657,54 @@ test "parseArgs fails" {
 
         try std.testing.expectEqualStrings(
             "illegal argument: /tmp/3",
+            diag.msg.?,
+        );
+    }
+
+    // repeated config flag
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--config",
+            "/tmp/1",
+            "-c",
+            "/tmp/2",
+        };
+
+        try std.testing.expectError(
+            error.RepeatedFlag,
+            parseArgs(std.testing.allocator, args, &diag),
+        );
+
+        try std.testing.expectEqualStrings(
+            "the -c/--config flag is present more than once",
+            diag.msg.?,
+        );
+    }
+
+    // repeated paths flag
+    {
+        var diag: Diag = .empty;
+        defer diag.deinit(std.testing.allocator);
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--paths",
+            "/tmp/1",
+            "-p",
+            "/tmp/2",
+        };
+
+        try std.testing.expectError(
+            error.RepeatedFlag,
+            parseArgs(std.testing.allocator, args, &diag),
+        );
+
+        try std.testing.expectEqualStrings(
+            "the -p/--paths flag is present more than once",
             diag.msg.?,
         );
     }
