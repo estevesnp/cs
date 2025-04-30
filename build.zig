@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const cli = @import("src/cli.zig");
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
 
@@ -15,6 +17,8 @@ pub fn build(b: *std.Build) void {
         .name = "cs",
         .root_module = exe_mod,
     });
+
+    checkRepeatedFlags();
 
     b.installArtifact(exe);
 
@@ -65,5 +69,29 @@ fn registerTests(b: *std.Build, test_step: *std.Build.Step) !void {
         const run_exe_unit_tests = b.addRunArtifact(unit_test);
 
         test_step.dependOn(&run_exe_unit_tests.step);
+    }
+}
+
+fn checkRepeatedFlags() void {
+    comptime {
+        const decls = @typeInfo(cli.Flag).@"union".decls;
+
+        for (decls[0 .. decls.len - 1], 0..) |decl, i| {
+            const flag_type = @field(cli.Flag, decl.name);
+            if (@typeInfo(flag_type) != .@"struct") continue;
+
+            for (decls[i + 1 ..]) |inner_decl| {
+                const inner_flag_type = @field(cli.Flag, inner_decl.name);
+                if (@typeInfo(inner_flag_type) != .@"struct") continue;
+
+                for (flag_type.flags) |flag| {
+                    for (inner_flag_type.flags) |inner_flag| {
+                        if (std.mem.eql(u8, flag, inner_flag)) {
+                            @compileError("repeated flag " ++ flag ++ " in flag types " ++ decl.name ++ " and " ++ inner_decl.name);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -69,7 +69,7 @@ fn Iterator(T: type) type {
     };
 }
 
-const Flag = union(enum) {
+pub const Flag = union(enum) {
     pub const Error = error{
         RepeatedFlag,
         MissingArgument,
@@ -78,7 +78,7 @@ const Flag = union(enum) {
     };
 
     pub const Config = struct {
-        const flags: []const []const u8 = &.{ "-c", "--config" };
+        pub const flags: []const []const u8 = &.{ "-c", "--config" };
 
         fn asFlag() Flag {
             return .{ .config = .{} };
@@ -119,7 +119,7 @@ const Flag = union(enum) {
     };
 
     pub const Paths = struct {
-        const flags: []const []const u8 = &.{ "-p", "--paths" };
+        pub const flags: []const []const u8 = &.{ "-p", "--paths" };
 
         fn asFlag() Flag {
             return .{ .paths = .{} };
@@ -179,11 +179,11 @@ const Flag = union(enum) {
 
     fn fromArg(flag: []const u8) Error!Flag {
         inline for (@typeInfo(Flag).@"union".decls) |decl| {
-            if (comptime std.mem.eql(u8, decl.name, "Error")) continue;
+            const flag_type = @field(Flag, decl.name);
+            if (@typeInfo(flag_type) != .@"struct") continue;
 
-            const flagType = @field(Flag, decl.name);
-            if (contains(flag, flagType.flags)) {
-                return flagType.asFlag();
+            if (contains(flag, flag_type.flags)) {
+                return flag_type.asFlag();
             }
         }
 
