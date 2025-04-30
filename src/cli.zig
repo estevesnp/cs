@@ -191,7 +191,7 @@ const Flag = union(enum) {
     }
 };
 
-pub fn parseArgs(allocator: Allocator, args: []const []const u8, diag: ?*Diag) !Options {
+pub fn parseArgs(allocator: Allocator, args: []const []const u8, diag: ?*Diag) Flag.Error!Options {
     var iter: Iterator([]const u8) = .init(args);
 
     var opts: Options = .empty;
