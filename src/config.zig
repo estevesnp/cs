@@ -15,13 +15,10 @@ const APP_CFG_DIR = "cs";
 const APP_CFG_FILE = "config.json";
 
 pub fn parseConfig(allocator: Allocator, cfg_file: std.fs.File) !json.Parsed(Config) {
-    const file_size = try cfg_file.getEndPos();
-    const file_buf = try allocator.alloc(u8, file_size);
-    defer allocator.free(file_buf);
+    var json_reader = json.reader(allocator, cfg_file.reader());
+    defer json_reader.deinit();
 
-    _ = try cfg_file.readAll(file_buf);
-
-    return try json.parseFromSlice(Config, allocator, file_buf, .{ .allocate = .alloc_always });
+    return json.parseFromTokenSource(Config, allocator, &json_reader, .{ .allocate = .alloc_always });
 }
 
 pub fn getConfigPath(allocator: Allocator) ![]const u8 {
