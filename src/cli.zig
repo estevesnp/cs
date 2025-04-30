@@ -48,7 +48,7 @@ fn Iterator(T: type) type {
         slice: []const T,
         pos: usize = 0,
 
-        const empty: Iterator(T) = .{ .slice = &.{} };
+        const empty: Self = .{ .slice = &.{} };
 
         fn init(slice: []const T) Self {
             return .{ .slice = slice };
