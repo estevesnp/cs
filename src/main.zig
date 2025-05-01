@@ -17,19 +17,12 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    var diag: cli.Diag = .empty;
-    defer diag.deinit(allocator);
+    var diag: cli.Diag = .default_streams;
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    var opts = Options.parseFromArgs(allocator, args, &diag) catch |err| {
-        if (diag.msg) |msg| {
-            try stderr.print("error parsing args: {s}\n", .{msg});
-        }
-        return err;
-    };
-    defer opts.deinit(allocator);
+    const opts = try Options.parseFromArgs(args, &diag);
 
     printOpts(opts);
 
@@ -55,8 +48,8 @@ fn getConfig(allocator: Allocator) !json.Parsed(Config) {
 }
 
 fn printOpts(opts: cli.Options) void {
-    if (opts.config_path) |cfg_p| {
-        std.debug.print("config path: {s}\n", .{cfg_p});
+    if (opts.depth) |d| {
+        std.debug.print("depth: {d}\n", .{d});
     }
 
     if (opts.roots) |roots| {
