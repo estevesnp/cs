@@ -39,7 +39,7 @@ pub fn main() !void {
 }
 
 fn getConfig(allocator: Allocator) !json.Parsed(Config) {
-    const cfg_path = try config.getConfigPath(allocator);
+    const cfg_path = try config.getDefaultConfigPath(allocator);
     defer allocator.free(cfg_path);
 
     const cfg_file = std.fs.openFileAbsolute(cfg_path, .{}) catch |err| switch (err) {

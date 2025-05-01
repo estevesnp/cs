@@ -101,6 +101,42 @@ const Flag = union(enum) {
         OutOfMemory,
     };
 
+    pub const Help = struct {
+        const flags: []const []const u8 = &.{ "-h", "--help" };
+
+        fn asFlag() Flag {
+            return .{ .help = .{} };
+        }
+
+        fn handleArgs(
+            self: @This(),
+            allocator: Allocator,
+            opts: *Options,
+            args_iter: *Iterator([]const u8),
+            diag: ?*Diag,
+        ) Error!void {
+            _ = .{ self, allocator, opts, args_iter, diag };
+            const usage =
+                \\usage: zig [flag] [options]
+                \\
+                \\flags:
+                \\
+                \\  -h, --help                   print this message
+                \\  -c, --config <path>          explicitly set config path
+                \\  -p, --paths  <path> [...]    configure paths to search for
+                \\
+                \\description:
+                \\
+                \\  search for git repositories in a list of configured paths and prompt user to
+                \\  either create a new tmux session or open an existing one inside that directory
+                \\
+            ;
+
+            std.io.getStdOut().writeAll(usage) catch @panic("error writing to stdout");
+            std.process.exit(0);
+        }
+    };
+
     pub const Config = struct {
         const flags: []const []const u8 = &.{ "-c", "--config" };
 
@@ -186,6 +222,7 @@ const Flag = union(enum) {
         }
     };
 
+    help: Help,
     config: Config,
     paths: Paths,
 

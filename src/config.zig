@@ -21,14 +21,14 @@ pub fn parseConfig(allocator: Allocator, cfg_file: std.fs.File) !json.Parsed(Con
     return json.parseFromTokenSource(Config, allocator, &json_reader, .{ .allocate = .alloc_always });
 }
 
-pub fn getConfigPath(allocator: Allocator) ![]const u8 {
+pub fn getDefaultConfigPath(allocator: Allocator) ![]const u8 {
     return switch (os_tag) {
-        .windows => getConfigPathWindows(allocator),
-        else => getConfigPathPosix(allocator),
+        .windows => getDefaultConfigPathWindows(allocator),
+        else => getDefaultConfigPathPosix(allocator),
     };
 }
 
-fn getConfigPathPosix(allocator: Allocator) ![]const u8 {
+fn getDefaultConfigPathPosix(allocator: Allocator) ![]const u8 {
     if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg| {
         return std.fs.path.join(allocator, &.{ xdg, APP_CFG_DIR, APP_CFG_FILE });
     }
@@ -37,7 +37,7 @@ fn getConfigPathPosix(allocator: Allocator) ![]const u8 {
     return std.fs.path.join(allocator, &.{ base_path, ".config", APP_CFG_DIR, APP_CFG_FILE });
 }
 
-fn getConfigPathWindows(allocator: Allocator) ![]const u8 {
+fn getDefaultConfigPathWindows(allocator: Allocator) ![]const u8 {
     const appdata = std.process.getenvW("APPDATA");
     return std.fs.path.join(allocator, &.{ appdata, APP_CFG_DIR, APP_CFG_FILE });
 }
