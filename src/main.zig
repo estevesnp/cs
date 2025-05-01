@@ -3,8 +3,8 @@ const Allocator = std.mem.Allocator;
 const json = std.json;
 
 const cli = @import("cli.zig");
-const config = @import("config.zig");
 const Options = cli.Options;
+const config = @import("config.zig");
 const Config = config.Config;
 const Walker = @import("Walker.zig");
 

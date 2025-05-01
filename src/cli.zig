@@ -715,25 +715,24 @@ test "Option.parseFromArgs fails" {
 test "repeated flags" {
     const decls = @typeInfo(Flag).@"union".decls;
 
-    inline for (decls[0 .. decls.len - 1], 0..) |decl, i| {
+    var flag_map: std.StringHashMapUnmanaged([]const u8) = .empty;
+    defer flag_map.deinit(std.testing.allocator);
+
+    inline for (decls) |decl| {
         const flag_type = @field(Flag, decl.name);
         if (@typeInfo(flag_type) != .@"struct") continue;
 
-        inline for (decls[i + 1 ..]) |inner_decl| {
-            const inner_flag_type = @field(Flag, inner_decl.name);
-            if (@typeInfo(inner_flag_type) != .@"struct") continue;
-
-            for (flag_type.flags) |flag| {
-                for (inner_flag_type.flags) |inner_flag| {
-                    if (std.mem.eql(u8, flag, inner_flag)) {
-                        std.debug.print(
-                            "found repeated flag '{s}' for types {s} and {s} ",
-                            .{ flag, decl.name, inner_decl.name },
-                        );
-                        return error.RepeatedFlag;
-                    }
-                }
+        for (flag_type.flags) |flag| {
+            const gop = try flag_map.getOrPut(std.testing.allocator, flag);
+            if (gop.found_existing) {
+                std.debug.print(
+                    "found repeated flag '{s}' for types '{s}.{s}' and '{s}.{s}'\n",
+                    .{ flag, @typeName(Flag), decl.name, @typeName(Flag), gop.value_ptr.* },
+                );
+                return error.RepeatedFlag;
             }
+
+            gop.value_ptr.* = decl.name;
         }
     }
 }
