@@ -5,7 +5,31 @@ pub const Options = struct {
     config_path: ?[]const u8 = null,
     roots: ?[]const []const u8 = null,
 
-    const empty: Options = .{ .config_path = null, .roots = null };
+    pub const empty: Options = .{ .config_path = null, .roots = null };
+
+    pub const Error = Flag.Error;
+
+    pub fn parseFromArgs(allocator: Allocator, args: []const []const u8, diag: ?*Diag) Error!Options {
+        var iter: Iterator([]const u8) = .init(args);
+
+        var opts: Options = .empty;
+        errdefer opts.deinit(allocator);
+
+        // discard program name
+        _ = iter.next();
+
+        while (iter.next()) |arg| {
+            const flag = Flag.fromArg(arg) catch |err| {
+                if (diag) |d| {
+                    try d.register(allocator, "illegal argument: {s}", .{arg});
+                }
+                return err;
+            };
+            try flag.handleArgs(allocator, &opts, &iter, diag);
+        }
+
+        return opts;
+    }
 
     pub fn deinit(self: *Options, allocator: Allocator) void {
         if (self.config_path) |cfg| allocator.free(cfg);
@@ -48,7 +72,7 @@ fn Iterator(T: type) type {
         slice: []const T,
         pos: usize = 0,
 
-        const empty: Iterator(T) = .{ .slice = &.{} };
+        const empty: Self = .{ .slice = &.{} };
 
         fn init(slice: []const T) Self {
             return .{ .slice = slice };
@@ -70,7 +94,7 @@ fn Iterator(T: type) type {
 }
 
 const Flag = union(enum) {
-    pub const Error = error{
+    const Error = error{
         RepeatedFlag,
         MissingArgument,
         IllegalArgument,
@@ -179,39 +203,16 @@ const Flag = union(enum) {
 
     fn fromArg(flag: []const u8) Error!Flag {
         inline for (@typeInfo(Flag).@"union".decls) |decl| {
-            if (comptime std.mem.eql(u8, decl.name, "Error")) continue;
+            const flag_type = @field(Flag, decl.name);
 
-            const flagType = @field(Flag, decl.name);
-            if (contains(flag, flagType.flags)) {
-                return flagType.asFlag();
+            if (contains(flag, flag_type.flags)) {
+                return flag_type.asFlag();
             }
         }
 
         return Error.IllegalArgument;
     }
 };
-
-pub fn parseArgs(allocator: Allocator, args: []const []const u8, diag: ?*Diag) !Options {
-    var iter: Iterator([]const u8) = .init(args);
-
-    var opts: Options = .empty;
-    errdefer opts.deinit(allocator);
-
-    // discard program name
-    _ = iter.next();
-
-    while (iter.next()) |arg| {
-        const flag = Flag.fromArg(arg) catch |err| {
-            if (diag) |d| {
-                try d.register(allocator, "illegal argument: {s}", .{arg});
-            }
-            return err;
-        };
-        try flag.handleArgs(allocator, &opts, &iter, diag);
-    }
-
-    return opts;
-}
 
 fn contains(needle: []const u8, haystack: []const []const u8) bool {
     for (haystack) |match| {
@@ -424,7 +425,7 @@ test "handle paths no path args with flag arg" {
     );
 }
 
-test parseArgs {
+test "Option.parseFromArgs" {
     // config and paths
     {
         var diag: Diag = .empty;
@@ -439,7 +440,7 @@ test parseArgs {
             "/tmp/3",
         };
 
-        var opts = try parseArgs(std.testing.allocator, args, &diag);
+        var opts = try Options.parseFromArgs(std.testing.allocator, args, &diag);
         defer opts.deinit(std.testing.allocator);
 
         try std.testing.expectEqual(null, diag.msg);
@@ -464,7 +465,7 @@ test parseArgs {
             "/tmp/3",
         };
 
-        var opts = try parseArgs(std.testing.allocator, args, &diag);
+        var opts = try Options.parseFromArgs(std.testing.allocator, args, &diag);
         defer opts.deinit(std.testing.allocator);
 
         try std.testing.expectEqual(null, diag.msg);
@@ -486,7 +487,7 @@ test parseArgs {
             "/tmp/1",
         };
 
-        var opts = try parseArgs(std.testing.allocator, args, &diag);
+        var opts = try Options.parseFromArgs(std.testing.allocator, args, &diag);
         defer opts.deinit(std.testing.allocator);
 
         try std.testing.expectEqual(null, diag.msg);
@@ -507,7 +508,7 @@ test parseArgs {
             "/tmp/2",
         };
 
-        var opts = try parseArgs(std.testing.allocator, args, &diag);
+        var opts = try Options.parseFromArgs(std.testing.allocator, args, &diag);
         defer opts.deinit(std.testing.allocator);
 
         try std.testing.expectEqual(null, diag.msg);
@@ -519,7 +520,7 @@ test parseArgs {
     }
 }
 
-test "parseArgs fails" {
+test "Option.parseFromArgs fails" {
     // no config, paths
     {
         var diag: Diag = .empty;
@@ -535,7 +536,7 @@ test "parseArgs fails" {
 
         try std.testing.expectError(
             error.IllegalArgument,
-            parseArgs(std.testing.allocator, args, &diag),
+            Options.parseFromArgs(std.testing.allocator, args, &diag),
         );
 
         try std.testing.expectEqualStrings(
@@ -558,7 +559,7 @@ test "parseArgs fails" {
 
         try std.testing.expectError(
             error.MissingArgument,
-            parseArgs(std.testing.allocator, args, &diag),
+            Options.parseFromArgs(std.testing.allocator, args, &diag),
         );
 
         try std.testing.expectEqualStrings(
@@ -582,7 +583,7 @@ test "parseArgs fails" {
 
         try std.testing.expectError(
             error.MissingArgument,
-            parseArgs(std.testing.allocator, args, &diag),
+            Options.parseFromArgs(std.testing.allocator, args, &diag),
         );
 
         try std.testing.expectEqualStrings(
@@ -605,7 +606,7 @@ test "parseArgs fails" {
 
         try std.testing.expectError(
             error.MissingArgument,
-            parseArgs(std.testing.allocator, args, &diag),
+            Options.parseFromArgs(std.testing.allocator, args, &diag),
         );
 
         try std.testing.expectEqualStrings(
@@ -628,7 +629,7 @@ test "parseArgs fails" {
 
         try std.testing.expectError(
             error.IllegalArgument,
-            parseArgs(std.testing.allocator, args, &diag),
+            Options.parseFromArgs(std.testing.allocator, args, &diag),
         );
 
         try std.testing.expectEqualStrings(
@@ -653,7 +654,7 @@ test "parseArgs fails" {
 
         try std.testing.expectError(
             error.IllegalArgument,
-            parseArgs(std.testing.allocator, args, &diag),
+            Options.parseFromArgs(std.testing.allocator, args, &diag),
         );
 
         try std.testing.expectEqualStrings(
@@ -677,7 +678,7 @@ test "parseArgs fails" {
 
         try std.testing.expectError(
             error.RepeatedFlag,
-            parseArgs(std.testing.allocator, args, &diag),
+            Options.parseFromArgs(std.testing.allocator, args, &diag),
         );
 
         try std.testing.expectEqualStrings(
@@ -701,12 +702,38 @@ test "parseArgs fails" {
 
         try std.testing.expectError(
             error.RepeatedFlag,
-            parseArgs(std.testing.allocator, args, &diag),
+            Options.parseFromArgs(std.testing.allocator, args, &diag),
         );
 
         try std.testing.expectEqualStrings(
             "the -p/--paths flag is present more than once",
             diag.msg.?,
         );
+    }
+}
+
+test "repeated flags" {
+    const decls = @typeInfo(Flag).@"union".decls;
+
+    inline for (decls[0 .. decls.len - 1], 0..) |decl, i| {
+        const flag_type = @field(Flag, decl.name);
+        if (@typeInfo(flag_type) != .@"struct") continue;
+
+        inline for (decls[i + 1 ..]) |inner_decl| {
+            const inner_flag_type = @field(Flag, inner_decl.name);
+            if (@typeInfo(inner_flag_type) != .@"struct") continue;
+
+            for (flag_type.flags) |flag| {
+                for (inner_flag_type.flags) |inner_flag| {
+                    if (std.mem.eql(u8, flag, inner_flag)) {
+                        std.debug.print(
+                            "found repeated flag '{s}' for types {s} and {s} ",
+                            .{ flag, decl.name, inner_decl.name },
+                        );
+                        return error.RepeatedFlag;
+                    }
+                }
+            }
+        }
     }
 }

@@ -69,7 +69,7 @@ test "ref all decls" {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-test "parseRoot" {
+test "parseRoots" {
     const allocator = std.testing.allocator;
 
     var root_1 = std.testing.tmpDir(.{ .iterate = true });
