@@ -509,6 +509,55 @@ test "handle paths no path args with flag arg" {
 }
 
 test "Option.parseFromArgs" {
+    { // no args
+        var out_list: std.ArrayList(u8) = .init(std.testing.allocator);
+        defer out_list.deinit();
+
+        var err_list: std.ArrayList(u8) = .init(std.testing.allocator);
+        defer err_list.deinit();
+
+        var diag: Diag = .{
+            .out_writer = out_list.writer().any(),
+            .err_writer = err_list.writer().any(),
+        };
+
+        const args: []const []const u8 = &.{"cs"};
+
+        const opts = try Options.parseFromArgs(args, &diag);
+
+        try std.testing.expectEqual(0, out_list.items.len);
+        try std.testing.expectEqual(0, err_list.items.len);
+
+        try std.testing.expectEqual(null, opts.depth);
+        try std.testing.expectEqual(null, opts.roots);
+    }
+
+    { // help
+        var out_list: std.ArrayList(u8) = .init(std.testing.allocator);
+        defer out_list.deinit();
+
+        var err_list: std.ArrayList(u8) = .init(std.testing.allocator);
+        defer err_list.deinit();
+
+        var diag: Diag = .{
+            .out_writer = out_list.writer().any(),
+            .err_writer = err_list.writer().any(),
+        };
+
+        const args: []const []const u8 = &.{
+            "cs",
+            "--help",
+        };
+
+        const opts = try Options.parseFromArgs(args, &diag);
+
+        try std.testing.expectEqual(null, opts.depth);
+        try std.testing.expectEqual(null, opts.roots);
+
+        try std.testing.expectEqual(0, err_list.items.len);
+        try std.testing.expectEqualStrings(Flag.Help.usage ++ "\n", out_list.items);
+    }
+
     { // depth and paths
         var out_list: std.ArrayList(u8) = .init(std.testing.allocator);
         defer out_list.deinit();
