@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const cli = @import("src/cli.zig");
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
 
@@ -18,8 +16,6 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
-    checkRepeatedFlags();
-
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -33,16 +29,18 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // tests
-    {
-        const test_step = b.step("test", "Run unit tests");
+    { // tests
+        const unit_tests = b.addTest(.{
+            .root_source_file = b.path("src/tests.zig"),
+        });
 
-        registerTests(b, test_step) catch |err|
-            std.debug.panic("error registering tests: {s}", .{@errorName(err)});
+        const run_exe_unit_tests = b.addRunArtifact(unit_tests);
+
+        const test_step = b.step("test", "Run unit tests");
+        test_step.dependOn(&run_exe_unit_tests.step);
     }
 
-    // check
-    {
+    { // check
         const check_exe = b.addExecutable(.{
             .name = "cs",
             .root_module = exe_mod,
@@ -50,48 +48,5 @@ pub fn build(b: *std.Build) void {
 
         const check_step = b.step("check", "Check if app compiles");
         check_step.dependOn(&check_exe.step);
-    }
-}
-
-fn registerTests(b: *std.Build, test_step: *std.Build.Step) !void {
-    var src_dir = try std.fs.cwd().openDir("src", .{ .iterate = true });
-    defer src_dir.close();
-
-    var walker = try src_dir.walk(b.allocator);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
-        const unit_test = b.addTest(.{
-            .root_source_file = b.path(b.pathJoin(&.{ "src", entry.path })),
-        });
-
-        const run_exe_unit_tests = b.addRunArtifact(unit_test);
-
-        test_step.dependOn(&run_exe_unit_tests.step);
-    }
-}
-
-fn checkRepeatedFlags() void {
-    comptime {
-        const decls = @typeInfo(cli.Flag).@"union".decls;
-
-        for (decls[0 .. decls.len - 1], 0..) |decl, i| {
-            const flag_type = @field(cli.Flag, decl.name);
-            if (@typeInfo(flag_type) != .@"struct") continue;
-
-            for (decls[i + 1 ..]) |inner_decl| {
-                const inner_flag_type = @field(cli.Flag, inner_decl.name);
-                if (@typeInfo(inner_flag_type) != .@"struct") continue;
-
-                for (flag_type.flags) |flag| {
-                    for (inner_flag_type.flags) |inner_flag| {
-                        if (std.mem.eql(u8, flag, inner_flag)) {
-                            @compileError("repeated flag " ++ flag ++ " in flag types " ++ decl.name ++ " and " ++ inner_decl.name);
-                        }
-                    }
-                }
-            }
-        }
     }
 }

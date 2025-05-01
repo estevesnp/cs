@@ -4,6 +4,7 @@ const json = std.json;
 
 const cli = @import("cli.zig");
 const config = @import("config.zig");
+const Options = cli.Options;
 const Config = config.Config;
 const Walker = @import("Walker.zig");
 
@@ -22,7 +23,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    var opts = cli.parseArgs(allocator, args, &diag) catch |err| {
+    var opts = Options.parseFromArgs(allocator, args, &diag) catch |err| {
         if (diag.msg) |msg| {
             try stderr.print("error parsing args: {s}\n", .{msg});
         }
@@ -81,8 +82,4 @@ fn run(allocator: Allocator, cfg: Config) !void {
     }
 
     try stdout.writeAll(out.items);
-}
-
-test "ref all decls" {
-    std.testing.refAllDeclsRecursive(@This());
 }
