@@ -1,6 +1,7 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const json = std.json;
+const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 
 const cli = @import("cli.zig");
 const Options = cli.Options;
@@ -12,23 +13,37 @@ const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 
 pub fn main() !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 
-    const allocator = gpa.allocator();
+    const gpa, const is_debug = gpa: {
+        break :gpa switch (builtin.mode) {
+            .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
+            .ReleaseFast, .ReleaseSmall => .{ std.heap.smp_allocator, false },
+        };
+    };
+    defer if (is_debug) {
+        _ = debug_allocator.deinit();
+    };
+
+    try start(gpa);
+}
+
+pub fn start(allocator: Allocator) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(allocator);
+    defer arena_state.deinit();
+
+    const arena = arena_state.allocator();
 
     var diag: cli.Diag = .default_streams;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
+    const args = try std.process.argsAlloc(arena);
     const opts = try Options.parseFromArgs(args, &diag);
 
     printOpts(opts);
 
-    const cfg = try getConfig(allocator);
+    const cfg = try getConfig(arena);
     defer cfg.deinit();
-    try run(allocator, cfg.value);
+    try run(arena, cfg.value);
 }
 
 fn getConfig(allocator: Allocator) !json.Parsed(Config) {
