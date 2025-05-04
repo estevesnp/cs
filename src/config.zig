@@ -1,45 +1,73 @@
 const std = @import("std");
-const json = std.json;
-const assert = std.debug.assert;
-const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+
+const json = std.json;
+const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
+
+const cli = @import("cli.zig");
+const Options = cli.Options;
+
 const os_tag = builtin.os.tag;
 
 pub const Config = struct {
+    const empty: Config = .{ .roots = &.{} };
+
     roots: []const []const u8,
 };
-
-const stderr = std.io.getStdErr().writer();
 
 const APP_CFG_DIR = "cs";
 const APP_CFG_FILE = "config.json";
 
-pub fn parseConfig(allocator: Allocator, cfg_file: std.fs.File) !json.Parsed(Config) {
-    var json_reader = json.reader(allocator, cfg_file.reader());
-    defer json_reader.deinit();
-
-    return json.parseFromTokenSource(Config, allocator, &json_reader, .{ .allocate = .alloc_always });
-}
-
-pub fn getDefaultConfigPath(allocator: Allocator) ![]const u8 {
-    return switch (os_tag) {
-        .windows => getDefaultConfigPathWindows(allocator),
-        else => getDefaultConfigPathPosix(allocator),
+pub fn createOrOpen() !std.fs.File {
+    const base_path, const sub_path = switch (os_tag) {
+        .windows => .{ std.process.getenvW("APPDATA").?, APP_CFG_DIR },
+        else => blk: {
+            if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg| {
+                break :blk .{ xdg, APP_CFG_DIR };
+            }
+            break :blk .{ std.posix.getenv("HOME").?, ".config/" ++ APP_CFG_DIR };
+        },
     };
+
+    var base_dir = try std.fs.openDirAbsolute(base_path, .{ .iterate = true });
+    defer base_dir.close();
+
+    var cfg_dir = try base_dir.makeOpenPath(sub_path, .{});
+    defer cfg_dir.close();
+
+    return cfg_dir.createFile(APP_CFG_FILE, .{ .read = true, .truncate = false });
 }
 
-fn getDefaultConfigPathPosix(allocator: Allocator) ![]const u8 {
-    if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg| {
-        return std.fs.path.join(allocator, &.{ xdg, APP_CFG_DIR, APP_CFG_FILE });
-    }
+pub fn updateConfig(arena: *std.heap.ArenaAllocator, cfg_file: std.fs.File, roots: []const []const u8) !Config {
+    const gpa = arena.allocator();
 
-    const base_path = std.posix.getenv("HOME") orelse unreachable;
-    return std.fs.path.join(allocator, &.{ base_path, ".config", APP_CFG_DIR, APP_CFG_FILE });
+    var cfg: Config = blk: {
+        if (try cfg_file.getEndPos() == 0) break :blk .empty;
+
+        var json_reader = json.reader(gpa, cfg_file.reader());
+        defer json_reader.deinit();
+        const c = try json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{});
+
+        try cfg_file.setEndPos(0);
+        try cfg_file.seekTo(0);
+
+        break :blk c;
+    };
+
+    cfg.roots = roots;
+
+    try json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
+
+    return cfg;
 }
 
-fn getDefaultConfigPathWindows(allocator: Allocator) ![]const u8 {
-    const appdata = std.process.getenvW("APPDATA");
-    return std.fs.path.join(allocator, &.{ appdata, APP_CFG_DIR, APP_CFG_FILE });
+pub fn openConfig(arena: *std.heap.ArenaAllocator, cfg_file: std.fs.File) !Config {
+    const gpa = arena.allocator();
+
+    var json_reader = json.reader(gpa, cfg_file.reader());
+    defer json_reader.deinit();
+    return try json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{});
 }
 
 test "ref all decls" {

@@ -24,6 +24,8 @@ pub fn deinit(self: *Walker) void {
 
 pub fn parseRoots(self: *Walker) ![]const []const u8 {
     for (self.roots) |root| {
+        if (!std.fs.path.isAbsolute(root)) return error.InvalidPath;
+
         try self.path_stack.append(self.arena.allocator(), root);
         defer self.path_stack.clearRetainingCapacity();
 
