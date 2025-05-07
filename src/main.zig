@@ -44,7 +44,15 @@ pub fn run(allocator: Allocator) !void {
         if (opts.roots) |roots|
             try config.updateConfig(&arena_state, cfg_file, roots)
         else
-            try config.openConfig(&arena_state, cfg_file);
+            config.openConfig(&arena_state, cfg_file) catch |err| switch (err) {
+                std.json.Error.UnexpectedEndOfInput => abort("no config file. configure by using the -p/--paths flag\n", .{}),
+                std.json.Error.SyntaxError => abort("bad config file\n", .{}),
+                else => return err,
+            };
+
+    if (cfg.roots.len == 0) {
+        abort("config has no roots. configure by using the -p/--paths flag\n", .{});
+    }
 
     var walker: Walker = .init(allocator, cfg.roots);
     defer walker.deinit();
@@ -56,7 +64,10 @@ fn parseAndPrintRepos(allocator: Allocator, cfg: Config) !void {
     var walker: Walker = .init(allocator, cfg.roots);
     defer walker.deinit();
 
-    const dirs = try walker.parseRoots();
+    const dirs = walker.parseRoots() catch |err| switch (err) {
+        error.InvalidPath => abort("invalid config. bad path\n", .{}),
+        else => return err,
+    };
 
     var buf_writer = std.io.bufferedWriter(stdout);
     const writer = buf_writer.writer();
@@ -67,4 +78,9 @@ fn parseAndPrintRepos(allocator: Allocator, cfg: Config) !void {
     }
 
     try buf_writer.flush();
+}
+
+fn abort(comptime fmt: []const u8, args: anytype) noreturn {
+    stderr.print(fmt, args) catch {};
+    std.process.exit(1);
 }
