@@ -20,15 +20,7 @@ const APP_CFG_DIR = "cs";
 const APP_CFG_FILE = "config.json";
 
 pub fn createOrOpen() !std.fs.File {
-    const base_path, const sub_path = switch (os_tag) {
-        .windows => .{ std.process.getenvW("APPDATA").?, APP_CFG_DIR },
-        else => blk: {
-            if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg| {
-                break :blk .{ xdg, APP_CFG_DIR };
-            }
-            break :blk .{ std.posix.getenv("HOME").?, ".config/" ++ APP_CFG_DIR };
-        },
-    };
+    const base_path, const sub_path = getConfigPaths();
 
     var base_dir = try std.fs.openDirAbsolute(base_path, .{ .iterate = true });
     defer base_dir.close();
@@ -72,4 +64,16 @@ pub fn openConfig(arena: *std.heap.ArenaAllocator, cfg_file: std.fs.File) !Confi
 
 test "ref all decls" {
     std.testing.refAllDeclsRecursive(@This());
+}
+
+fn getConfigPaths() struct { []const u8, []const u8 } {
+    return switch (os_tag) {
+        .windows => .{ std.process.getenvW("APPDATA").?, APP_CFG_DIR },
+        else => blk: {
+            if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg| {
+                break :blk .{ xdg, APP_CFG_DIR };
+            }
+            break :blk .{ std.posix.getenv("HOME").?, ".config/" ++ APP_CFG_DIR };
+        },
+    };
 }

@@ -37,7 +37,10 @@ pub fn run(allocator: Allocator) !void {
     const args = try std.process.argsAlloc(arena);
     const opts = try Options.parseFromArgs(args, &diag);
 
-    var cfg_file = try config.createOrOpen();
+    var cfg_file = config.createOrOpen() catch |err| switch (err) {
+        std.fs.File.OpenError.FileNotFound => abort("config base path not found\n", .{}),
+        else => return err,
+    };
     defer cfg_file.close();
 
     const cfg =
@@ -54,14 +57,11 @@ pub fn run(allocator: Allocator) !void {
         abort("config has no roots. configure by using the -p/--paths flag\n", .{});
     }
 
-    var walker: Walker = .init(allocator, cfg.roots);
-    defer walker.deinit();
-
-    try parseAndPrintRepos(arena, cfg);
+    try parseAndPrintRepos(arena, cfg.roots, opts.depth);
 }
 
-fn parseAndPrintRepos(allocator: Allocator, cfg: Config) !void {
-    var walker: Walker = .init(allocator, cfg.roots);
+fn parseAndPrintRepos(allocator: Allocator, roots: []const []const u8, max_depth: ?usize) !void {
+    var walker: Walker = .init(allocator, roots, max_depth);
     defer walker.deinit();
 
     const dirs = walker.parseRoots() catch |err| switch (err) {
