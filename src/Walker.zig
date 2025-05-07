@@ -5,16 +5,17 @@ const Walker = @This();
 
 arena: std.heap.ArenaAllocator,
 roots: []const []const u8,
-max_depth: usize = 5,
+max_depth: usize,
 
 git_projects: std.ArrayListUnmanaged([]const u8) = .empty,
 path_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 to_check_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 
-pub fn init(allocator: Allocator, roots: []const []const u8) Walker {
+pub fn init(allocator: Allocator, roots: []const []const u8, max_depth: ?usize) Walker {
     return .{
         .roots = roots,
         .arena = std.heap.ArenaAllocator.init(allocator),
+        .max_depth = max_depth orelse 10,
     };
 }
 
@@ -24,6 +25,8 @@ pub fn deinit(self: *Walker) void {
 
 pub fn parseRoots(self: *Walker) ![]const []const u8 {
     for (self.roots) |root| {
+        if (!std.fs.path.isAbsolute(root)) return error.InvalidPath;
+
         try self.path_stack.append(self.arena.allocator(), root);
         defer self.path_stack.clearRetainingCapacity();
 
@@ -87,7 +90,7 @@ test "parseRoots" {
     try test_setupDirs(root_1.dir);
     try test_setupDirs(root_2.dir);
 
-    var walker: Walker = .init(allocator, &.{ root_1_path, root_2_path });
+    var walker: Walker = .init(allocator, &.{ root_1_path, root_2_path }, null);
     defer walker.deinit();
 
     const git_paths = try walker.parseRoots();
