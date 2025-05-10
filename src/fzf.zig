@@ -37,6 +37,9 @@ pub fn runProcess(allocator: Allocator, dirs: []const []const u8, path_buf: []u8
     }
     try buf_writer.flush();
 
+    fzf_process.stdin.?.close();
+    fzf_process.stdin = null;
+
     const reader = fzf_process.stdout.?.reader();
     const path = try reader.readUntilDelimiterOrEof(path_buf, '\n');
 
