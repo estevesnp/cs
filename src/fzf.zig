@@ -15,9 +15,10 @@ const cmd_preview = "cmd /C \"dir /a {}\"";
 
 const args = [_][]const u8{
     "fzf",
-    "--header=choose a dir",
+    "--header=choose a repo",
     "--reverse",
     "--scheme=path",
+    "--preview-label=[ repository files ]",
     "--preview",
     getPreviewCommand(),
 };
