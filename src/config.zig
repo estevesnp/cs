@@ -47,7 +47,21 @@ pub fn updateConfig(arena: *std.heap.ArenaAllocator, cfg_file: std.fs.File, root
         break :blk c;
     };
 
-    cfg.roots = roots;
+    const new_roots = try gpa.alloc([]const u8, roots.len);
+
+    var cwd: ?std.fs.Dir = null;
+
+    for (roots, 0..) |r, idx| {
+        if (std.fs.path.isAbsolute(r)) {
+            new_roots[idx] = r;
+            continue;
+        }
+
+        if (cwd == null) cwd = std.fs.cwd();
+        new_roots[idx] = try cwd.?.realpathAlloc(gpa, r);
+    }
+
+    cfg.roots = new_roots;
 
     try json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
 

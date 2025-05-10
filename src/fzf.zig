@@ -9,11 +9,16 @@ const os_tag = builtin.os.tag;
 pub const NO_MATCH_EXIT_CODE: u8 = 1;
 pub const INTERRUPT_EXIT_CODE: u8 = 130;
 
+const ls_preview = "ls -lah --color=always {}";
+const eza_preview = "eza -la --color=always {}";
+const cmd_preview = "cmd /C \"dir /a {}\"";
+
 const args = [_][]const u8{
     "fzf",
     "--header=choose a dir",
     "--reverse",
     "--scheme=path",
+    "--preview",
     getPreviewCommand(),
 };
 
@@ -24,11 +29,13 @@ pub fn runProcess(allocator: Allocator, dirs: []const []const u8, path_buf: []u8
 
     try fzf_process.spawn();
 
-    const in_writer = fzf_process.stdin.?.writer();
+    var buf_writer = std.io.bufferedWriter(fzf_process.stdin.?.writer());
+    const fzf_writer = buf_writer.writer();
     for (dirs) |dir| {
-        try in_writer.writeAll(dir);
-        try in_writer.writeByte('\n');
+        try fzf_writer.writeAll(dir);
+        try fzf_writer.writeByte('\n');
     }
+    try buf_writer.flush();
 
     const reader = fzf_process.stdout.?.reader();
     const path = try reader.readUntilDelimiterOrEof(path_buf, '\n');
@@ -47,7 +54,7 @@ pub fn runProcess(allocator: Allocator, dirs: []const []const u8, path_buf: []u8
 
 fn getPreviewCommand() []const u8 {
     return switch (os_tag) {
-        .windows => @panic("not implemented"),
-        else => "--preview=ls -lah --color=always {}",
+        .windows => cmd_preview,
+        else => ls_preview,
     };
 }

@@ -27,7 +27,7 @@ pub fn main() !void {
     try run(gpa);
 }
 
-pub fn run(allocator: Allocator) !void {
+fn run(allocator: Allocator) !void {
     var arena_state: std.heap.ArenaAllocator = .init(allocator);
     defer arena_state.deinit();
 
