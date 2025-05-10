@@ -1,4 +1,5 @@
 const std = @import("std");
+const fzf = @import("fzf.zig");
 const json = std.json;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
@@ -9,8 +10,8 @@ const config = @import("config.zig");
 const Config = config.Config;
 const Walker = @import("Walker.zig");
 
-const stdout = std.io.getStdOut().writer();
-const stderr = std.io.getStdErr().writer();
+const stdout = std.io.getStdOut();
+const stderr = std.io.getStdErr();
 
 pub fn main() !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -26,7 +27,7 @@ pub fn main() !void {
     try run(gpa);
 }
 
-pub fn run(allocator: Allocator) !void {
+fn run(allocator: Allocator) !void {
     var arena_state: std.heap.ArenaAllocator = .init(allocator);
     defer arena_state.deinit();
 
@@ -57,11 +58,7 @@ pub fn run(allocator: Allocator) !void {
         abort("config has no roots. configure by using the -p/--paths flag\n", .{});
     }
 
-    try parseAndPrintRepos(arena, cfg.roots, opts.depth);
-}
-
-fn parseAndPrintRepos(allocator: Allocator, roots: []const []const u8, max_depth: ?usize) !void {
-    var walker: Walker = .init(allocator, roots, max_depth);
+    var walker: Walker = .init(arena, cfg.roots, opts.depth);
     defer walker.deinit();
 
     const dirs = walker.parseRoots() catch |err| switch (err) {
@@ -69,18 +66,14 @@ fn parseAndPrintRepos(allocator: Allocator, roots: []const []const u8, max_depth
         else => return err,
     };
 
-    var buf_writer = std.io.bufferedWriter(stdout);
-    const writer = buf_writer.writer();
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
 
-    for (dirs) |dir| {
-        try writer.writeAll(dir);
-        try writer.writeByte('\n');
-    }
+    const path = try fzf.runProcess(allocator, dirs, &buf) orelse return;
 
-    try buf_writer.flush();
+    try stdout.writer().print("selected path: {s}\n", .{path});
 }
 
 fn abort(comptime fmt: []const u8, args: anytype) noreturn {
-    stderr.print(fmt, args) catch {};
+    stderr.writer().print(fmt, args) catch {};
     std.process.exit(1);
 }
