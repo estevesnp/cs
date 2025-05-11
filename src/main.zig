@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 
 const cli = @import("cli.zig");
 const config = @import("config.zig");
+const fzf = @import("fzf.zig");
 
 const Walker = @import("Walker.zig");
 const Config = config.Config;
@@ -207,8 +208,19 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts) !void {
     var walker: Walker = .init(gpa, sources);
     const repos = try walker.parseRoots();
 
-    for (repos) |repo| {
-        std.debug.print("{s}\n", .{repo});
+    if (opts.repo) |repo_name| {
+        for (repos) |repo_path| {
+            if (std.mem.endsWith(u8, repo_path, repo_name)) {
+                try stdout.print("found: {s}\n", .{repo_path});
+                return;
+            }
+        }
+    }
+
+    const resp = try fzf.runProcess(gpa, repos, opts.preview_cmd);
+
+    if (resp) |r| {
+        try stdout.print("chose: {s}\n", .{r});
     }
 }
 

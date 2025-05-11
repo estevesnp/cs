@@ -8,17 +8,19 @@ const ls_preview = "ls -lah --color=always {}";
 const eza_preview = "eza -la --color=always {}";
 const cmd_preview = "cmd /C \"dir /a {}\"";
 
-const args = [_][]const u8{
-    "fzf",
-    "--header=choose a repo",
-    "--reverse",
-    "--scheme=path",
-    "--preview-label=[ repository files ]",
-    "--preview",
-    getPreviewCommand(),
-};
+pub fn runProcess(gpa: std.mem.Allocator, dirs: []const []const u8, preview_cmd: ?[]const u8) !?[]u8 {
+    const prev_cmd = preview_cmd orelse getDefaultPreviewCommand();
 
-pub fn runProcess(gpa: std.mem.Allocator, dirs: []const []const u8, path_buf: []u8) !?[]u8 {
+    const args = [_][]const u8{
+        "fzf",
+        "--header=choose a repo",
+        "--reverse",
+        "--scheme=path",
+        "--preview-label=[ repository files ]",
+        "--preview",
+        prev_cmd,
+    };
+
     var fzf_process: std.process.Child = .init(&args, gpa);
     fzf_process.stdin_behavior = .Pipe;
     fzf_process.stdout_behavior = .Pipe;
@@ -36,14 +38,19 @@ pub fn runProcess(gpa: std.mem.Allocator, dirs: []const []const u8, path_buf: []
     fzf_process.stdin.?.close();
     fzf_process.stdin = null;
 
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    var fixed_stream = std.io.fixedBufferStream(&buf);
+
     const reader = fzf_process.stdout.?.reader();
-    const path = try reader.readUntilDelimiterOrEof(path_buf, '\n');
+
+    try reader.streamUntilDelimiter(fixed_stream.writer(), '\n', buf.len);
+    const path = buf[0..fixed_stream.pos];
 
     const term = try fzf_process.wait();
 
     return switch (term) {
         .Exited => |error_code| switch (error_code) {
-            0 => path,
+            0 => try gpa.dupe(u8, path),
             NO_MATCH_EXIT_CODE, INTERRUPT_EXIT_CODE => null,
             else => error.NonZeroExitCode,
         },
@@ -51,7 +58,7 @@ pub fn runProcess(gpa: std.mem.Allocator, dirs: []const []const u8, path_buf: []
     };
 }
 
-fn getPreviewCommand() []const u8 {
+fn getDefaultPreviewCommand() []const u8 {
     return switch (builtin.os.tag) {
         .windows => cmd_preview,
         else => ls_preview,
