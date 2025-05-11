@@ -72,7 +72,7 @@ fn getConfigDirParts() CfgPath {
     };
 }
 
-pub fn getFileAndConfig(arena: *std.heap.ArenaAllocator) !struct { std.fs.File, Config } {
+pub fn getAndTruncateConfig(arena: *std.heap.ArenaAllocator) !struct { std.fs.File, Config } {
     const gpa = arena.allocator();
     var cfg_file = try createOrOpen();
 

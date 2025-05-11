@@ -6,7 +6,9 @@ const Allocator = std.mem.Allocator;
 const cli = @import("cli.zig");
 const config = @import("config.zig");
 
+const Walker = @import("Walker.zig");
 const Config = config.Config;
+const Source = config.Source;
 
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
@@ -69,7 +71,7 @@ fn start(allocator: Allocator) !void {
         .config => try printConfig(&arena),
         .set_paths => |p| try setPaths(&arena, p),
         .add_paths => |p| try addPaths(&arena, p),
-        .run => |opts| try run(opts),
+        .run => |opts| try run(&arena, opts),
     }
 }
 
@@ -117,7 +119,7 @@ fn printConfig(arena: *std.heap.ArenaAllocator) !void {
     try buf_writer.flush();
 }
 
-fn populateSources(gpa: Allocator, sources: []config.Source, paths: []const []const u8) !void {
+fn populateSources(gpa: Allocator, sources: []Source, paths: []const []const u8) !void {
     const cwd = std.fs.cwd();
 
     for (paths, 0..) |path, idx| {
@@ -134,11 +136,11 @@ fn populateSources(gpa: Allocator, sources: []config.Source, paths: []const []co
 fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
     const gpa = arena.allocator();
 
-    const cfg_file, var cfg = config.getFileAndConfig(arena) catch |err|
+    const cfg_file, var cfg = config.getAndTruncateConfig(arena) catch |err|
         abort("error parsing config: {s}\n", .{@errorName(err)});
     defer cfg_file.close();
 
-    const sources = try gpa.alloc(config.Source, paths.len);
+    const sources = try gpa.alloc(Source, paths.len);
 
     populateSources(gpa, sources, paths) catch |err|
         abort("error resolving path: {s}\n", .{@errorName(err)});
@@ -153,11 +155,11 @@ fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
 fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
     const gpa = arena.allocator();
 
-    const cfg_file, var cfg = config.getFileAndConfig(arena) catch |err|
+    const cfg_file, var cfg = config.getAndTruncateConfig(arena) catch |err|
         abort("error parsing config: {s}\n", .{@errorName(err)});
     defer cfg_file.close();
 
-    const sources = try gpa.alloc(config.Source, cfg.sources.len + paths.len);
+    const sources = try gpa.alloc(Source, cfg.sources.len + paths.len);
     @memcpy(sources[0..cfg.sources.len], cfg.sources);
 
     populateSources(gpa, sources[cfg.sources.len..], paths) catch |err|
@@ -170,17 +172,32 @@ fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
     try stdout.writeAll("paths successfully added\n");
 }
 
-fn run(opts: cli.RunOpts) !void {
-    std.debug.print("running\n", .{});
-    if (opts.paths) |ps| {
-        std.debug.print("paths: |", .{});
-        for (ps) |p| {
-            std.debug.print(" {s} |", .{p});
+fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts) !void {
+    const gpa = arena.allocator();
+
+    const cfg_file = try config.createOrOpen();
+    defer cfg_file.close();
+
+    var json_reader = std.json.reader(gpa, cfg_file.reader());
+    defer json_reader.deinit();
+
+    const cfg = std.json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{}) catch |err|
+        abort("error parsing config: {s}\n", .{@errorName(err)});
+
+    const sources = if (opts.paths) |paths| blk: {
+        const s = try gpa.alloc(Source, paths.len);
+        for (paths, 0..) |path, idx| {
+            s[idx] = .{ .root = path };
         }
-        std.debug.print("\n", .{});
+        break :blk s;
+    } else cfg.sources;
+
+    var walker: Walker = .init(gpa, sources);
+    const repos = try walker.parseRoots();
+
+    for (repos) |repo| {
+        std.debug.print("{s}\n", .{repo});
     }
-    if (opts.repo) |r| std.debug.print("repo: {s}\n", .{r});
-    if (opts.preview_cmd) |p| std.debug.print("preview command: {s}\n", .{p});
 }
 
 fn abort(comptime fmt: []const u8, args: anytype) noreturn {

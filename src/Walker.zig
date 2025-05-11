@@ -1,21 +1,20 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Source = @import("config.zig").Source;
 
 const Walker = @This();
 
 arena: std.heap.ArenaAllocator,
-roots: []const []const u8,
-max_depth: usize,
+sources: []const Source,
 
 git_projects: std.ArrayListUnmanaged([]const u8) = .empty,
 path_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 to_check_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 
-pub fn init(allocator: Allocator, roots: []const []const u8, max_depth: ?usize) Walker {
+pub fn init(allocator: Allocator, sources: []const Source) Walker {
     return .{
-        .roots = roots,
+        .sources = sources,
         .arena = std.heap.ArenaAllocator.init(allocator),
-        .max_depth = max_depth orelse 10,
     };
 }
 
@@ -24,23 +23,23 @@ pub fn deinit(self: *Walker) void {
 }
 
 pub fn parseRoots(self: *Walker) ![]const []const u8 {
-    for (self.roots) |root| {
-        if (!std.fs.path.isAbsolute(root)) return error.InvalidPath;
+    for (self.sources) |source| {
+        if (!std.fs.path.isAbsolute(source.root)) return error.InvalidPath;
 
-        try self.path_stack.append(self.arena.allocator(), root);
+        try self.path_stack.append(self.arena.allocator(), source.root);
         defer self.path_stack.clearRetainingCapacity();
 
-        var root_dir = try std.fs.openDirAbsolute(root, .{ .iterate = true });
+        var root_dir = try std.fs.openDirAbsolute(source.root, .{ .iterate = true });
         defer root_dir.close();
 
-        try self.recurse(root_dir, 0);
+        try self.recurse(root_dir, source.depth, 0);
     }
 
     return self.git_projects.items;
 }
 
-fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
-    if (depth >= self.max_depth) return;
+fn recurse(self: *Walker, dir: std.fs.Dir, max_depth: usize, depth: usize) !void {
+    if (depth >= max_depth) return;
     const allocator = self.arena.allocator();
 
     const init_len = self.to_check_stack.items.len;
@@ -63,7 +62,7 @@ fn recurse(self: *Walker, dir: std.fs.Dir, depth: usize) !void {
         defer dir_to_check.close();
 
         try self.path_stack.append(allocator, path_to_check);
-        try self.recurse(dir_to_check, depth + 1);
+        try self.recurse(dir_to_check, max_depth, depth + 1);
         self.path_stack.items.len -= 1;
     }
 }
@@ -87,10 +86,10 @@ test "parseRoots" {
     const root_2_path = try root_2.dir.realpathAlloc(allocator, ".");
     defer allocator.free(root_2_path);
 
-    try test_setupDirs(root_1.dir);
-    try test_setupDirs(root_2.dir);
+    try t_setupDirs(root_1.dir);
+    try t_setupDirs(root_2.dir);
 
-    var walker: Walker = .init(allocator, &.{ root_1_path, root_2_path }, null);
+    var walker: Walker = .init(allocator, &.{ .{ .root = root_1_path }, .{ .root = root_2_path } });
     defer walker.deinit();
 
     const git_paths = try walker.parseRoots();
@@ -99,9 +98,9 @@ test "parseRoots" {
 
     const expected_paths: []const []const u8 = &.{
         "git-1",
-        &test_join(&.{ "git-2", "nested" }),
-        &test_join(&.{ "git-3", "nested", "nesteder" }),
-        &test_join(&.{ "git-double", "nested" }),
+        &t_join(&.{ "git-2", "nested" }),
+        &t_join(&.{ "git-3", "nested", "nesteder" }),
+        &t_join(&.{ "git-double", "nested" }),
     };
 
     for (@as([]const []const u8, &.{ root_1_path, root_2_path })) |path| {
@@ -117,12 +116,12 @@ test "parseRoots" {
     }
 }
 
-fn test_join(comptime path_parts: []const []const u8) [test_getLen(path_parts)]u8 {
+fn t_join(comptime path_parts: []const []const u8) [t_getLen(path_parts)]u8 {
     if (path_parts.len < 2) {
         @compileError("join needs more than one path part");
     }
 
-    var res: [test_getLen(path_parts)]u8 = undefined;
+    var res: [t_getLen(path_parts)]u8 = undefined;
     var slice: []u8 = &res;
 
     var idx: usize = 0;
@@ -140,7 +139,7 @@ fn test_join(comptime path_parts: []const []const u8) [test_getLen(path_parts)]u
     return res;
 }
 
-fn test_getLen(pp: []const []const u8) usize {
+fn t_getLen(pp: []const []const u8) usize {
     var count: usize = pp.len - 1;
     for (pp) |p| {
         count += p.len;
@@ -148,7 +147,7 @@ fn test_getLen(pp: []const []const u8) usize {
     return count;
 }
 
-fn test_setupDirs(dir: std.fs.Dir) !void {
+fn t_setupDirs(dir: std.fs.Dir) !void {
     {
         try dir.makeDir("git-1");
         var git = try dir.openDir("git-1", .{});
