@@ -1,5 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const fs = std.fs;
+const json = std.json;
 
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
@@ -11,6 +13,8 @@ const fzf = @import("fzf.zig");
 const Walker = @import("Walker.zig");
 const Config = config.Config;
 const Source = config.Source;
+
+const SourceSet = std.ArrayHashMapUnmanaged(Source, void, Source.Context, true);
 
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
@@ -90,7 +94,7 @@ fn printConfig(arena: *std.heap.ArenaAllocator) !void {
     var buf_writer = std.io.bufferedWriter(stdout);
     const writer = buf_writer.writer();
 
-    const cfg_file = std.fs.openFileAbsolute(file_path, .{}) catch |err| switch (err) {
+    const cfg_file = fs.openFileAbsolute(file_path, .{}) catch |err| switch (err) {
         error.FileNotFound => abort("\nno config file found\n", .{}),
         else => abort("\nerror opening config file: {s}\n", .{@errorName(err)}),
     };
@@ -121,6 +125,18 @@ fn printConfig(arena: *std.heap.ArenaAllocator) !void {
     try buf_writer.flush();
 }
 
+fn populateSources(gpa: Allocator, source_set: *SourceSet, paths: []const []const u8) !void {
+    const cwd = std.fs.cwd();
+    for (paths) |path| {
+        if (std.fs.path.isAbsolute(path)) {
+            _ = try source_set.getOrPut(gpa, .{ .root = path });
+        }
+
+        const abs_path = try cwd.realpathAlloc(gpa, path);
+        _ = try source_set.getOrPut(gpa, .{ .root = abs_path });
+    }
+}
+
 fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
@@ -130,20 +146,12 @@ fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
         abort("error parsing config: {s}\n", .{@errorName(err)});
     defer cfg_file.close();
 
-    var source_map: std.ArrayHashMapUnmanaged(Source, void, Source.Context, false) = .empty;
-    defer source_map.deinit(gpa);
+    var source_set: SourceSet = .empty;
+    defer source_set.deinit(gpa);
 
-    const cwd = std.fs.cwd();
-    for (paths) |path| {
-        if (std.fs.path.isAbsolute(path)) {
-            _ = try source_map.getOrPut(gpa, .{ .root = path });
-        }
+    try populateSources(gpa, &source_set, paths);
 
-        const abs_path = try cwd.realpathAlloc(gpa, path);
-        _ = try source_map.getOrPut(gpa, .{ .root = abs_path });
-    }
-
-    cfg.sources = source_map.keys();
+    cfg.sources = source_set.keys();
 
     try std.json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
 
@@ -159,24 +167,16 @@ fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
         abort("error parsing config: {s}\n", .{@errorName(err)});
     defer cfg_file.close();
 
-    var source_map: std.ArrayHashMapUnmanaged(Source, void, Source.Context, false) = .empty;
-    defer source_map.deinit(gpa);
+    var source_set: SourceSet = .empty;
+    defer source_set.deinit(gpa);
 
     for (cfg.sources) |source| {
-        _ = try source_map.getOrPut(gpa, source);
+        _ = try source_set.getOrPut(gpa, source);
     }
 
-    const cwd = std.fs.cwd();
-    for (paths) |path| {
-        if (std.fs.path.isAbsolute(path)) {
-            _ = try source_map.getOrPut(gpa, .{ .root = path });
-        }
+    try populateSources(gpa, &source_set, paths);
 
-        const abs_path = try cwd.realpathAlloc(gpa, path);
-        _ = try source_map.getOrPut(gpa, .{ .root = abs_path });
-    }
-
-    cfg.sources = source_map.keys();
+    cfg.sources = source_set.keys();
 
     try std.json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
 
@@ -195,14 +195,14 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts) !void {
     const cfg = std.json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{}) catch |err|
         abort("error parsing config: {s}\n", .{@errorName(err)});
 
+    var source_set: SourceSet = .empty;
+    defer source_set.deinit(gpa);
+
     const sources = if (opts.paths) |paths| blk: {
         assert(paths.len > 0);
 
-        const s = try gpa.alloc(Source, paths.len);
-        for (paths, 0..) |path, idx| {
-            s[idx] = .{ .root = path };
-        }
-        break :blk s;
+        try populateSources(gpa, &source_set, paths);
+        break :blk source_set.keys();
     } else cfg.sources;
 
     var walker: Walker = .init(gpa, sources);
@@ -210,7 +210,7 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts) !void {
 
     if (opts.repo) |repo_name| {
         for (repos) |repo_path| {
-            if (std.mem.endsWith(u8, repo_path, repo_name)) {
+            if (std.mem.eql(u8, fs.path.basename(repo_path), repo_name)) {
                 try stdout.print("found: {s}\n", .{repo_path});
                 return;
             }

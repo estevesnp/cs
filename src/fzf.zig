@@ -43,7 +43,10 @@ pub fn runProcess(gpa: std.mem.Allocator, dirs: []const []const u8, preview_cmd:
 
     const reader = fzf_process.stdout.?.reader();
 
-    try reader.streamUntilDelimiter(fixed_stream.writer(), '\n', buf.len);
+    reader.streamUntilDelimiter(fixed_stream.writer(), '\n', buf.len) catch |err| switch (err) {
+        error.EndOfStream => {},
+        else => return err,
+    };
     const path = buf[0..fixed_stream.pos];
 
     const term = try fzf_process.wait();
