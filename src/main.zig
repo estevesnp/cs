@@ -36,6 +36,24 @@ fn run(allocator: Allocator) !void {
     var diag: cli.Diag = .default_streams;
 
     const args = try std.process.argsAlloc(arena);
+
+    const cmd = try @import("cfg.zig").parseArgs(args);
+    switch (cmd) {
+        .run => |r| {
+            std.debug.print("run; ", .{});
+            if (r.paths) |paths| {
+                std.debug.print("paths:", .{});
+                for (paths) |p| std.debug.print(" {s}", .{p});
+                std.debug.print("; ", .{});
+            }
+            if (r.repo) |repo| std.debug.print("repo: {s}", .{repo});
+            std.debug.print("\n", .{});
+        },
+        else => std.debug.print("{any}\n", .{cmd}),
+    }
+
+    if (true) return;
+
     const opts = try Options.parseFromArgs(args, &diag);
 
     var cfg_file = config.createOrOpen() catch |err| switch (err) {

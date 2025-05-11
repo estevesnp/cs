@@ -1,11 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const Allocator = std.mem.Allocator;
-const File = std.fs.File;
-
-const os_tag = builtin.os.tag;
-
 pub const NO_MATCH_EXIT_CODE: u8 = 1;
 pub const INTERRUPT_EXIT_CODE: u8 = 130;
 
@@ -23,7 +18,7 @@ const args = [_][]const u8{
     getPreviewCommand(),
 };
 
-pub fn runProcess(allocator: Allocator, dirs: []const []const u8, path_buf: []u8) !?[]u8 {
+pub fn runProcess(allocator: std.mem.Allocator, dirs: []const []const u8, path_buf: []u8) !?[]u8 {
     var fzf_process: std.process.Child = .init(&args, allocator);
     fzf_process.stdin_behavior = .Pipe;
     fzf_process.stdout_behavior = .Pipe;
@@ -57,7 +52,7 @@ pub fn runProcess(allocator: Allocator, dirs: []const []const u8, path_buf: []u8
 }
 
 fn getPreviewCommand() []const u8 {
-    return switch (os_tag) {
+    return switch (builtin.os.tag) {
         .windows => cmd_preview,
         else => ls_preview,
     };
