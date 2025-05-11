@@ -17,6 +17,16 @@ pub const Source = struct {
 
     /// max depth to search for repos. defaults to 10
     depth: usize = 10,
+
+    pub const Context = struct {
+        pub fn hash(_: @This(), s: Source) u32 {
+            return std.array_hash_map.hashString(s.root);
+        }
+
+        pub fn eql(_: @This(), a: Source, b: Source, _: usize) bool {
+            return std.array_hash_map.eqlString(a.root, b.root);
+        }
+    };
 };
 
 /// config

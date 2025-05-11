@@ -119,20 +119,6 @@ fn printConfig(arena: *std.heap.ArenaAllocator) !void {
     try buf_writer.flush();
 }
 
-fn populateSources(gpa: Allocator, sources: []Source, paths: []const []const u8) !void {
-    const cwd = std.fs.cwd();
-
-    for (paths, 0..) |path, idx| {
-        if (std.fs.path.isAbsolute(path)) {
-            sources[idx] = .{ .root = path };
-            continue;
-        }
-
-        const abs_path = try cwd.realpathAlloc(gpa, path);
-        sources[idx] = .{ .root = abs_path };
-    }
-}
-
 fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
     const gpa = arena.allocator();
 
@@ -140,12 +126,20 @@ fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
         abort("error parsing config: {s}\n", .{@errorName(err)});
     defer cfg_file.close();
 
-    const sources = try gpa.alloc(Source, paths.len);
+    var source_map: std.ArrayHashMapUnmanaged(Source, void, Source.Context, false) = .empty;
+    defer source_map.deinit(gpa);
 
-    populateSources(gpa, sources, paths) catch |err|
-        abort("error resolving path: {s}\n", .{@errorName(err)});
+    const cwd = std.fs.cwd();
+    for (paths) |path| {
+        if (std.fs.path.isAbsolute(path)) {
+            _ = try source_map.getOrPut(gpa, .{ .root = path });
+        }
 
-    cfg.sources = sources;
+        const abs_path = try cwd.realpathAlloc(gpa, path);
+        _ = try source_map.getOrPut(gpa, .{ .root = abs_path });
+    }
+
+    cfg.sources = source_map.keys();
 
     try std.json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
 
@@ -159,13 +153,24 @@ fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
         abort("error parsing config: {s}\n", .{@errorName(err)});
     defer cfg_file.close();
 
-    const sources = try gpa.alloc(Source, cfg.sources.len + paths.len);
-    @memcpy(sources[0..cfg.sources.len], cfg.sources);
+    var source_map: std.ArrayHashMapUnmanaged(Source, void, Source.Context, false) = .empty;
+    defer source_map.deinit(gpa);
 
-    populateSources(gpa, sources[cfg.sources.len..], paths) catch |err|
-        abort("error resolving path: {s}\n", .{@errorName(err)});
+    for (cfg.sources) |source| {
+        _ = try source_map.getOrPut(gpa, source);
+    }
 
-    cfg.sources = sources;
+    const cwd = std.fs.cwd();
+    for (paths) |path| {
+        if (std.fs.path.isAbsolute(path)) {
+            _ = try source_map.getOrPut(gpa, .{ .root = path });
+        }
+
+        const abs_path = try cwd.realpathAlloc(gpa, path);
+        _ = try source_map.getOrPut(gpa, .{ .root = abs_path });
+    }
+
+    cfg.sources = source_map.keys();
 
     try std.json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
 
