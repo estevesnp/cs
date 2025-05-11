@@ -3,7 +3,8 @@ const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
-const cfg = @import("cfg.zig");
+const cli = @import("cli.zig");
+const config = @import("config.zig");
 
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
@@ -54,7 +55,7 @@ fn start(allocator: Allocator) !void {
 
     const args = try std.process.argsAlloc(gpa);
 
-    const cmd = cfg.parseArgs(args) catch |err| {
+    const cmd = cli.parseArgs(args) catch |err| {
         stderr.print("error parsing arguments: {s}\n", .{@errorName(err)}) catch {};
         stderr.writeAll(USAGE) catch {};
         std.process.exit(1);
@@ -74,7 +75,10 @@ fn printHelp() !void {
 }
 
 fn printConfig() !void {
-    std.debug.print("config\n", .{});
+    const cfg_path = config.getConfigPaths();
+    const path_fmt = std.fs.path.fmtJoin(&.{ cfg_path.base_path, cfg_path.sub_path });
+
+    try stdout.print("config path: {}\n", .{path_fmt});
 }
 
 fn setPaths(paths: []const []const u8) !void {
