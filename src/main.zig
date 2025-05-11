@@ -6,6 +6,8 @@ const Allocator = std.mem.Allocator;
 const cli = @import("cli.zig");
 const config = @import("config.zig");
 
+const Config = config.Config;
+
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 
@@ -21,6 +23,7 @@ const USAGE =
     \\
     \\  -h, --help                    print this message
     \\  --config                      print config and config path
+    \\  --preview <str>               preview command to pass to fzf
     \\  -p, --paths     <path> [...]  choose paths to search for in this run
     \\  -s, --set-paths <path> [...]  update config setting paths to search for
     \\  -a, --add-paths <path> [...]  update config adding to paths to search for
@@ -56,7 +59,7 @@ fn start(allocator: Allocator) !void {
     const args = try std.process.argsAlloc(gpa);
 
     const cmd = cli.parseArgs(args) catch |err| {
-        stderr.print("error parsing arguments: {s}\n", .{@errorName(err)}) catch {};
+        stderr.print("error parsing arguments: {s}\n\n", .{@errorName(err)}) catch {};
         stderr.writeAll(USAGE) catch {};
         std.process.exit(1);
     };
@@ -76,24 +79,23 @@ fn printHelp() !void {
 
 fn printConfig(arena: *std.heap.ArenaAllocator) !void {
     const gpa = arena.allocator();
-    const cfg_path = config.getConfigPaths();
 
-    const file_path = try std.fs.path.join(gpa, &.{ cfg_path.base_path, cfg_path.sub_path, "config.json" });
-    try stdout.print("config path: {s}\n\n", .{file_path});
+    const file_path = try config.getConfigPath(gpa);
+    try stdout.print("config path: {s}\n", .{file_path});
 
     var buf_writer = std.io.bufferedWriter(stdout);
     const writer = buf_writer.writer();
 
     const cfg_file = std.fs.openFileAbsolute(file_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => abort("no config file found\n", .{}),
-        else => abort("error opening config file: {s}\n", .{@errorName(err)}),
+        error.FileNotFound => abort("\nno config file found\n", .{}),
+        else => abort("\nerror opening config file: {s}\n", .{@errorName(err)}),
     };
     defer cfg_file.close();
 
     var json_reader = std.json.reader(gpa, cfg_file.reader());
     defer json_reader.deinit();
 
-    const cfg = std.json.parseFromTokenSourceLeaky(config.Config, gpa, &json_reader, .{}) catch |err|
+    const cfg = std.json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{}) catch |err|
         abort("error parsing config: {s}\n", .{@errorName(err)});
 
     if (cfg.sources.len == 0) {
@@ -115,27 +117,8 @@ fn printConfig(arena: *std.heap.ArenaAllocator) !void {
     try buf_writer.flush();
 }
 
-fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
-    const gpa = arena.allocator();
-    var cfg_file = try config.createOrOpen();
-    defer cfg_file.close();
-
-    var cfg: config.Config = blk: {
-        if (try cfg_file.getEndPos() == 0) break :blk .empty;
-
-        var json_reader = std.json.reader(gpa, cfg_file.reader());
-        defer json_reader.deinit();
-
-        const c = std.json.parseFromTokenSourceLeaky(config.Config, gpa, &json_reader, .{}) catch |err|
-            abort("error parsing config: {s}\n", .{@errorName(err)});
-
-        try cfg_file.setEndPos(0);
-        try cfg_file.seekTo(0);
-
-        break :blk c;
-    };
-
-    var sources = try gpa.alloc(config.Source, paths.len);
+fn populateSources(gpa: Allocator, sources: []config.Source, paths: []const []const u8) !void {
+    const cwd = std.fs.cwd();
 
     for (paths, 0..) |path, idx| {
         if (std.fs.path.isAbsolute(path)) {
@@ -143,12 +126,22 @@ fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
             continue;
         }
 
-        const abs_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| switch (err) {
-            error.FileNotFound => abort("error resolving path: path not found: {s}\n", .{path}),
-            else => abort("error resolving path: {s}\n", .{@errorName(err)}),
-        };
+        const abs_path = try cwd.realpathAlloc(gpa, path);
         sources[idx] = .{ .root = abs_path };
     }
+}
+
+fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
+    const gpa = arena.allocator();
+
+    const cfg_file, var cfg = config.getFileAndConfig(arena) catch |err|
+        abort("error parsing config: {s}\n", .{@errorName(err)});
+    defer cfg_file.close();
+
+    const sources = try gpa.alloc(config.Source, paths.len);
+
+    populateSources(gpa, sources, paths) catch |err|
+        abort("error resolving path: {s}\n", .{@errorName(err)});
 
     cfg.sources = sources;
 
@@ -159,39 +152,16 @@ fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
 
 fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
     const gpa = arena.allocator();
-    var cfg_file = try config.createOrOpen();
+
+    const cfg_file, var cfg = config.getFileAndConfig(arena) catch |err|
+        abort("error parsing config: {s}\n", .{@errorName(err)});
     defer cfg_file.close();
 
-    var cfg: config.Config = blk: {
-        if (try cfg_file.getEndPos() == 0) break :blk .empty;
-
-        var json_reader = std.json.reader(gpa, cfg_file.reader());
-        defer json_reader.deinit();
-        const c = std.json.parseFromTokenSourceLeaky(config.Config, gpa, &json_reader, .{}) catch |err|
-            abort("error parsing config: {s}\n", .{@errorName(err)});
-
-        try cfg_file.setEndPos(0);
-        try cfg_file.seekTo(0);
-
-        break :blk c;
-    };
-
-    var sources = try gpa.alloc(config.Source, cfg.sources.len + paths.len);
+    const sources = try gpa.alloc(config.Source, cfg.sources.len + paths.len);
     @memcpy(sources[0..cfg.sources.len], cfg.sources);
 
-    for (paths, cfg.sources.len..) |path, idx| {
-        if (std.fs.path.isAbsolute(path)) {
-            sources[idx] = .{ .root = path };
-            continue;
-        }
-
-        const abs_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| switch (err) {
-            error.FileNotFound => abort("error resolving path: path not found: {s}\n", .{path}),
-            else => abort("error resolving path: {s}\n", .{@errorName(err)}),
-        };
-
-        sources[idx] = .{ .root = abs_path };
-    }
+    populateSources(gpa, sources[cfg.sources.len..], paths) catch |err|
+        abort("error resolving path: {s}\n", .{@errorName(err)});
 
     cfg.sources = sources;
 
