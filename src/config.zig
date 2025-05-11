@@ -10,10 +10,22 @@ const Options = cli.Options;
 
 const os_tag = builtin.os.tag;
 
-pub const Config = struct {
-    const empty: Config = .{ .roots = &.{} };
+/// source to search for repos
+pub const Source = struct {
+    /// path to start search
+    root: []const u8,
 
-    roots: []const []const u8,
+    /// max depth to search for repos. defaults to 10
+    depth: usize = 10,
+};
+
+/// config
+pub const Config = struct {
+    /// sources to search for repos
+    sources: []Source,
+
+    /// optional preview command provided to fzf
+    preview_cmd: ?[]const u8 = null,
 };
 
 const APP_CFG_DIR = "cs";

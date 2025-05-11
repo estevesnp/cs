@@ -63,7 +63,7 @@ fn start(allocator: Allocator) !void {
 
     switch (cmd) {
         .help => try printHelp(),
-        .config => try printConfig(),
+        .config => try printConfig(&arena_state),
         .set_paths => |p| try setPaths(p),
         .add_paths => |p| try addPaths(p),
         .run => |r| try run(r.paths, r.repo),
@@ -74,11 +74,48 @@ fn printHelp() !void {
     try stdout.writeAll(USAGE);
 }
 
-fn printConfig() !void {
+fn printConfig(arena: *std.heap.ArenaAllocator) !void {
+    const gpa = arena.allocator();
     const cfg_path = config.getConfigPaths();
-    const path_fmt = std.fs.path.fmtJoin(&.{ cfg_path.base_path, cfg_path.sub_path });
 
-    try stdout.print("config path: {}\n", .{path_fmt});
+    var buf_writer = std.io.bufferedWriter(stdout);
+
+    const writer = buf_writer.writer();
+
+    const file_path = try std.fs.path.join(gpa, &.{ cfg_path.base_path, cfg_path.sub_path, "config.json" });
+
+    try writer.print("config path: {s}\n", .{file_path});
+
+    const cfg_file = std.fs.openFileAbsolute(file_path, .{}) catch |err| {
+        try buf_writer.flush();
+        switch (err) {
+            error.FileNotFound => abort("no config file found\n", .{}),
+            else => abort("error opening config file: {s}\n", .{@errorName(err)}),
+        }
+    };
+    defer cfg_file.close();
+
+    var reader = std.json.reader(gpa, cfg_file.reader());
+    const cfg = std.json.parseFromTokenSourceLeaky(config.Config, gpa, &reader, .{}) catch |err|
+        abort("error parsing config: {s}\n", .{@errorName(err)});
+
+    if (cfg.sources.len == 0) {
+        try writer.writeAll("\nno search sources\n");
+    } else {
+        try writer.writeAll("\nsearch sources:\n");
+        for (cfg.sources) |src| {
+            try writer.print("  - path: {s}\n", .{src.root});
+            try writer.print("    depth: {d}\n", .{src.depth});
+        }
+    }
+
+    if (cfg.preview_cmd) |preview| {
+        try writer.print("\npreview command: '{s}'\n", .{preview});
+    } else {
+        try writer.writeAll("\nno preview command\n");
+    }
+
+    try buf_writer.flush();
 }
 
 fn setPaths(paths: []const []const u8) !void {
@@ -107,4 +144,9 @@ fn run(paths: ?[]const []const u8, repo: ?[]const u8) !void {
         std.debug.print("\n", .{});
     }
     if (repo) |r| std.debug.print("repo: {s}\n", .{r});
+}
+
+fn abort(comptime fmt: []const u8, args: anytype) noreturn {
+    stderr.print(fmt, args) catch {};
+    std.process.exit(1);
 }

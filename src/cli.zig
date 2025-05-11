@@ -1,24 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
 
-/// config
-pub const Config = struct {
-    /// sources to search for repos
-    sources: []Source,
-
-    /// optional preview command provided to fzf
-    preview_cmd: ?[]const u8 = null,
-};
-
-/// source to search for repos
-pub const Source = struct {
-    /// path to start search
-    root: []const u8,
-
-    /// max depth to search for repos. defaults to 10
-    depth: usize = 10,
-};
-
 /// options
 pub const Command = union(enum) {
     /// print help
