@@ -10,19 +10,25 @@ pub const Command = union(enum) {
     config: void,
 
     /// runs the actual tool
-    run: struct {
-        /// optional paths to search for, overrides config
-        paths: ?[]const []const u8,
-
-        /// optional repo to try to match
-        repo: ?[]const u8,
-    },
+    run: RunOpts,
 
     /// set root paths
     set_paths: []const []const u8,
 
     /// add root paths
     add_paths: []const []const u8,
+};
+
+/// options for running the tool
+pub const RunOpts = struct {
+    /// optional paths to search for, overrides config
+    paths: ?[]const []const u8,
+
+    /// optional repo to try to match
+    repo: ?[]const u8,
+
+    /// optional preview command, overrides config
+    preview_cmd: ?[]const u8,
 };
 
 pub const Error = error{
@@ -37,6 +43,7 @@ pub const Error = error{
 pub fn parseArgs(args: []const []const u8) Error!Command {
     var paths: ?[]const []const u8 = null;
     var repo: ?[]const u8 = null;
+    var preview_cmd: ?[]const u8 = null;
 
     var iter: Iterator([]const u8) = .init(args[1..]);
 
@@ -93,6 +100,15 @@ pub fn parseArgs(args: []const []const u8) Error!Command {
             if (paths.?.len == 0) {
                 return Error.NoArguments;
             }
+        } else if (std.mem.eql(u8, arg, "--preview")) {
+            if (preview_cmd != null) {
+                return Error.RepeatedArgument;
+            }
+
+            const prev = iter.next() orelse return Error.NoArguments;
+            if (isFlagArgument(prev)) return Error.NoArguments;
+
+            preview_cmd = prev;
         } else {
             if (isFlagArgument(arg)) {
                 return Error.UnknownFlag;
@@ -110,6 +126,7 @@ pub fn parseArgs(args: []const []const u8) Error!Command {
         .run = .{
             .paths = paths,
             .repo = repo,
+            .preview_cmd = preview_cmd,
         },
     };
 }
@@ -279,24 +296,46 @@ test "parseArgs add_paths" {
 }
 
 test "parseArgs run" {
-    {
+    { // repo, paths, preview
+        const cmd = try parseArgs(&.{ "cs", "repo", "-p", "a", "b", "c", "--preview", "ls {}" });
+        try std.testing.expectEqualStrings("repo", cmd.run.repo.?);
+        try std.testing.expectEqualStrings("ls {}", cmd.run.preview_cmd.?);
+        try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.run.paths.?);
+    }
+    { // repo, paths
         const cmd = try parseArgs(&.{ "cs", "repo", "-p", "a", "b", "c" });
         try std.testing.expectEqualStrings("repo", cmd.run.repo.?);
+        try std.testing.expectEqual(null, cmd.run.preview_cmd);
         try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.run.paths.?);
     }
-    {
+    { // preview, paths
+        const cmd = try parseArgs(&.{ "cs", "--preview", "ls {}", "--paths", "a", "b", "c" });
+        try std.testing.expectEqual(null, cmd.run.repo);
+        try std.testing.expectEqualStrings("ls {}", cmd.run.preview_cmd.?);
+        try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.run.paths.?);
+    }
+    { // paths
         const cmd = try parseArgs(&.{ "cs", "--paths", "a", "b", "c" });
         try std.testing.expectEqual(null, cmd.run.repo);
+        try std.testing.expectEqual(null, cmd.run.preview_cmd);
         try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.run.paths.?);
     }
-    {
+    { // repo
         const cmd = try parseArgs(&.{ "cs", "repo" });
         try std.testing.expectEqualStrings("repo", cmd.run.repo.?);
+        try std.testing.expectEqual(null, cmd.run.preview_cmd);
         try std.testing.expectEqual(null, cmd.run.paths);
     }
-    {
+    { // preview
+        const cmd = try parseArgs(&.{ "cs", "--preview", "ls {}" });
+        try std.testing.expectEqual(null, cmd.run.repo);
+        try std.testing.expectEqualStrings("ls {}", cmd.run.preview_cmd.?);
+        try std.testing.expectEqual(null, cmd.run.paths);
+    }
+    { // null
         const cmd = try parseArgs(&.{"cs"});
         try std.testing.expectEqual(null, cmd.run.repo);
+        try std.testing.expectEqual(null, cmd.run.preview_cmd);
         try std.testing.expectEqual(null, cmd.run.paths);
     }
 
@@ -311,4 +350,7 @@ test "parseArgs run" {
     try std.testing.expectError(Error.UnknownFlag, parseArgs(&.{ "cs", "-q" }));
     try std.testing.expectError(Error.UnknownFlag, parseArgs(&.{ "cs", "--idk" }));
     try std.testing.expectError(Error.UnknownFlag, parseArgs(&.{ "cs", "repo", "--idk" }));
+
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "--preview" }));
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "--preview", "-p", "a" }));
 }

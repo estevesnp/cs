@@ -48,10 +48,10 @@ pub fn main() !void {
 }
 
 fn start(allocator: Allocator) !void {
-    var arena_state: std.heap.ArenaAllocator = .init(allocator);
-    defer arena_state.deinit();
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
 
-    const gpa = arena_state.allocator();
+    const gpa = arena.allocator();
 
     const args = try std.process.argsAlloc(gpa);
 
@@ -63,10 +63,10 @@ fn start(allocator: Allocator) !void {
 
     switch (cmd) {
         .help => try printHelp(),
-        .config => try printConfig(&arena_state),
-        .set_paths => |p| try setPaths(p),
+        .config => try printConfig(&arena),
+        .set_paths => |p| try setPaths(&arena, p),
         .add_paths => |p| try addPaths(p),
-        .run => |r| try run(r.paths, r.repo),
+        .run => |opts| try run(opts),
     }
 }
 
@@ -118,12 +118,44 @@ fn printConfig(arena: *std.heap.ArenaAllocator) !void {
     try buf_writer.flush();
 }
 
-fn setPaths(paths: []const []const u8) !void {
-    std.debug.print("setting paths: |", .{});
-    for (paths) |p| {
-        std.debug.print(" {s} |", .{p});
+fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
+    const gpa = arena.allocator();
+    var cfg_file = try config.createOrOpen();
+    defer cfg_file.close();
+
+    var cfg: config.Config = blk: {
+        if (try cfg_file.getEndPos() == 0) break :blk .empty;
+
+        var json_reader = std.json.reader(gpa, cfg_file.reader());
+        defer json_reader.deinit();
+        const c = try std.json.parseFromTokenSourceLeaky(config.Config, gpa, &json_reader, .{});
+
+        try cfg_file.setEndPos(0);
+        try cfg_file.seekTo(0);
+
+        break :blk c;
+    };
+
+    var sources = try gpa.alloc(config.Source, paths.len);
+
+    for (paths, 0..) |path, idx| {
+        if (std.fs.path.isAbsolute(path)) {
+            sources[idx] = .{ .root = path };
+            continue;
+        }
+
+        const abs_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| switch (err) {
+            error.FileNotFound => abort("error resolving path: path not found: {s}\n", .{path}),
+            else => abort("error resolving path: {s}\n", .{@errorName(err)}),
+        };
+        sources[idx] = .{ .root = abs_path };
     }
-    std.debug.print("\n", .{});
+
+    cfg.sources = sources;
+
+    try std.json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
+
+    try stdout.writeAll("paths successfully set\n");
 }
 
 fn addPaths(paths: []const []const u8) !void {
@@ -134,16 +166,17 @@ fn addPaths(paths: []const []const u8) !void {
     std.debug.print("\n", .{});
 }
 
-fn run(paths: ?[]const []const u8, repo: ?[]const u8) !void {
+fn run(opts: cli.RunOpts) !void {
     std.debug.print("running\n", .{});
-    if (paths) |ps| {
+    if (opts.paths) |ps| {
         std.debug.print("paths: |", .{});
         for (ps) |p| {
             std.debug.print(" {s} |", .{p});
         }
         std.debug.print("\n", .{});
     }
-    if (repo) |r| std.debug.print("repo: {s}\n", .{r});
+    if (opts.repo) |r| std.debug.print("repo: {s}\n", .{r});
+    if (opts.preview_cmd) |p| std.debug.print("preview command: {s}\n", .{p});
 }
 
 fn abort(comptime fmt: []const u8, args: anytype) noreturn {
