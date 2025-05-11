@@ -208,20 +208,33 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts) !void {
     var walker: Walker = .init(gpa, sources);
     const repos = try walker.parseRoots();
 
+    var query: ?[]const u8 = null;
+
     if (opts.repo) |repo_name| {
+        var found: ?[]const u8 = null;
+        query = repo_name;
+
         for (repos) |repo_path| {
             if (std.mem.eql(u8, fs.path.basename(repo_path), repo_name)) {
-                try stdout.print("found: {s}\n", .{repo_path});
-                return;
+                if (found == null) {
+                    found = repo_path;
+                    continue;
+                }
+
+                found = null;
+                break;
             }
+        }
+
+        if (found) |repo_path| {
+            try stdout.print("found: {s}\n", .{repo_path});
+            return;
         }
     }
 
-    const resp = try fzf.runProcess(gpa, repos, opts.preview_cmd);
+    const repo_path = try fzf.runProcess(gpa, repos, opts.preview_cmd, query) orelse return;
 
-    if (resp) |r| {
-        try stdout.print("chose: {s}\n", .{r});
-    }
+    try stdout.print("chose: {s}\n", .{repo_path});
 }
 
 fn abort(comptime fmt: []const u8, args: anytype) noreturn {

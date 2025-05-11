@@ -8,9 +8,12 @@ const ls_preview = "ls -lah --color=always {}";
 const eza_preview = "eza -la --color=always {}";
 const cmd_preview = "cmd /C \"dir /a {}\"";
 
-pub fn runProcess(gpa: std.mem.Allocator, dirs: []const []const u8, preview_cmd: ?[]const u8) !?[]u8 {
-    const prev_cmd = preview_cmd orelse getDefaultPreviewCommand();
-
+pub fn runProcess(
+    gpa: std.mem.Allocator,
+    dirs: []const []const u8,
+    preview_cmd: ?[]const u8,
+    query: ?[]const u8,
+) !?[]u8 {
     const args = [_][]const u8{
         "fzf",
         "--header=choose a repo",
@@ -18,7 +21,9 @@ pub fn runProcess(gpa: std.mem.Allocator, dirs: []const []const u8, preview_cmd:
         "--scheme=path",
         "--preview-label=[ repository files ]",
         "--preview",
-        prev_cmd,
+        preview_cmd orelse getDefaultPreviewCommand(),
+        "--query",
+        query orelse "",
     };
 
     var fzf_process: std.process.Child = .init(&args, gpa);
