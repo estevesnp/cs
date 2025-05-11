@@ -18,8 +18,8 @@ const args = [_][]const u8{
     getPreviewCommand(),
 };
 
-pub fn runProcess(allocator: std.mem.Allocator, dirs: []const []const u8, path_buf: []u8) !?[]u8 {
-    var fzf_process: std.process.Child = .init(&args, allocator);
+pub fn runProcess(gpa: std.mem.Allocator, dirs: []const []const u8, path_buf: []u8) !?[]u8 {
+    var fzf_process: std.process.Child = .init(&args, gpa);
     fzf_process.stdin_behavior = .Pipe;
     fzf_process.stdout_behavior = .Pipe;
 
