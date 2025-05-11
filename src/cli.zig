@@ -165,6 +165,10 @@ fn eqlAny(haystack: []const []const u8, needle: []const u8) bool {
     return false;
 }
 
+test "ref all decls" {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
 test Iterator {
     {
         var iter = Iterator(u8).init(&.{ 1, 2, 3 });

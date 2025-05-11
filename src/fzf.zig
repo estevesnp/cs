@@ -57,3 +57,7 @@ fn getPreviewCommand() []const u8 {
         else => ls_preview,
     };
 }
+
+test "ref all decls" {
+    std.testing.refAllDeclsRecursive(@This());
+}

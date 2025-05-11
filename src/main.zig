@@ -150,3 +150,7 @@ fn abort(comptime fmt: []const u8, args: anytype) noreturn {
     stderr.print(fmt, args) catch {};
     std.process.exit(1);
 }
+
+test "ref all decls" {
+    std.testing.refAllDeclsRecursive(@This());
+}

@@ -21,6 +21,8 @@ pub const Source = struct {
 
 /// config
 pub const Config = struct {
+    pub const empty: Config = .{ .sources = &.{}, .preview_cmd = null };
+
     /// sources to search for repos
     sources: []Source,
 
@@ -73,7 +75,7 @@ pub fn updateConfig(arena: *std.heap.ArenaAllocator, cfg_file: std.fs.File, root
         new_roots[idx] = try cwd.?.realpathAlloc(gpa, r);
     }
 
-    cfg.roots = new_roots;
+    cfg.sources = &.{};
 
     try json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
 
@@ -86,10 +88,6 @@ pub fn openConfig(arena: *std.heap.ArenaAllocator, cfg_file: std.fs.File) !Confi
     var json_reader = json.reader(gpa, cfg_file.reader());
     defer json_reader.deinit();
     return try json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{});
-}
-
-test "ref all decls" {
-    std.testing.refAllDeclsRecursive(@This());
 }
 
 const CfgPath = struct {
@@ -112,4 +110,8 @@ pub fn getConfigPaths() CfgPath {
         .base_path = std.posix.getenv("HOME").?,
         .sub_path = ".config/" ++ APP_CFG_DIR,
     };
+}
+
+test "ref all decls" {
+    std.testing.refAllDeclsRecursive(@This());
 }
