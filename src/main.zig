@@ -1,17 +1,36 @@
 const std = @import("std");
-const fzf = @import("fzf.zig");
-const json = std.json;
-const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
-const cli = @import("cli.zig");
-const Options = cli.Options;
-const config = @import("config.zig");
-const Config = config.Config;
-const Walker = @import("Walker.zig");
+const Allocator = std.mem.Allocator;
 
-const stdout = std.io.getStdOut();
-const stderr = std.io.getStdErr();
+const cfg = @import("cfg.zig");
+
+const stdout = std.io.getStdOut().writer();
+const stderr = std.io.getStdErr().writer();
+
+const USAGE =
+    \\usage: cs [repo] [flags]
+    \\
+    \\arguments:
+    \\
+    \\  repo                          repository to automatically open if found
+    \\
+    \\
+    \\flags:
+    \\
+    \\  -h, --help                    print this message
+    \\  --config                      print config and config path
+    \\  -p, --paths     <path> [...]  choose paths to search for in this run
+    \\  -s, --set-paths <path> [...]  update config setting paths to search for
+    \\  -a, --add-paths <path> [...]  update config adding to paths to search for
+    \\
+    \\
+    \\description:
+    \\
+    \\  search for git repositories in a list of configured paths and prompt user to
+    \\  either create a new tmux session or open an existing one inside that directory
+    \\
+;
 
 pub fn main() !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -24,74 +43,64 @@ pub fn main() !void {
         _ = debug_allocator.deinit();
     };
 
-    try run(gpa);
+    try start(gpa);
 }
 
-fn run(allocator: Allocator) !void {
+fn start(allocator: Allocator) !void {
     var arena_state: std.heap.ArenaAllocator = .init(allocator);
     defer arena_state.deinit();
 
-    const arena = arena_state.allocator();
+    const gpa = arena_state.allocator();
 
-    var diag: cli.Diag = .default_streams;
+    const args = try std.process.argsAlloc(gpa);
 
-    const args = try std.process.argsAlloc(arena);
+    const cmd = cfg.parseArgs(args) catch |err| {
+        stderr.print("error parsing arguments: {s}\n", .{@errorName(err)}) catch {};
+        stderr.writeAll(USAGE) catch {};
+        std.process.exit(1);
+    };
 
-    const cmd = try @import("cfg.zig").parseArgs(args);
     switch (cmd) {
-        .run => |r| {
-            std.debug.print("run; ", .{});
-            if (r.paths) |paths| {
-                std.debug.print("paths:", .{});
-                for (paths) |p| std.debug.print(" {s}", .{p});
-                std.debug.print("; ", .{});
-            }
-            if (r.repo) |repo| std.debug.print("repo: {s}", .{repo});
-            std.debug.print("\n", .{});
-        },
-        else => std.debug.print("{any}\n", .{cmd}),
+        .help => try printHelp(),
+        .config => try printConfig(),
+        .set_paths => |p| try setPaths(p),
+        .add_paths => |p| try addPaths(p),
+        .run => |r| try run(r.paths, r.repo),
     }
-
-    if (true) return;
-
-    const opts = try Options.parseFromArgs(args, &diag);
-
-    var cfg_file = config.createOrOpen() catch |err| switch (err) {
-        std.fs.File.OpenError.FileNotFound => abort("config base path not found\n", .{}),
-        else => return err,
-    };
-    defer cfg_file.close();
-
-    const cfg =
-        if (opts.roots) |roots|
-            try config.updateConfig(&arena_state, cfg_file, roots)
-        else
-            config.openConfig(&arena_state, cfg_file) catch |err| switch (err) {
-                std.json.Error.UnexpectedEndOfInput => abort("no config file. configure by using the -p/--paths flag\n", .{}),
-                std.json.Error.SyntaxError => abort("bad config file\n", .{}),
-                else => return err,
-            };
-
-    if (cfg.roots.len == 0) {
-        abort("config has no roots. configure by using the -p/--paths flag\n", .{});
-    }
-
-    var walker: Walker = .init(arena, cfg.roots, opts.depth);
-    defer walker.deinit();
-
-    const dirs = walker.parseRoots() catch |err| switch (err) {
-        error.InvalidPath => abort("invalid config. bad path\n", .{}),
-        else => return err,
-    };
-
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-
-    const path = try fzf.runProcess(allocator, dirs, &buf) orelse return;
-
-    try stdout.writer().print("selected path: {s}\n", .{path});
 }
 
-fn abort(comptime fmt: []const u8, args: anytype) noreturn {
-    stderr.writer().print(fmt, args) catch {};
-    std.process.exit(1);
+fn printHelp() !void {
+    try stdout.writeAll(USAGE);
+}
+
+fn printConfig() !void {
+    std.debug.print("config\n", .{});
+}
+
+fn setPaths(paths: []const []const u8) !void {
+    std.debug.print("setting paths: |", .{});
+    for (paths) |p| {
+        std.debug.print(" {s} |", .{p});
+    }
+    std.debug.print("\n", .{});
+}
+
+fn addPaths(paths: []const []const u8) !void {
+    std.debug.print("adding paths: |", .{});
+    for (paths) |p| {
+        std.debug.print(" {s} |", .{p});
+    }
+    std.debug.print("\n", .{});
+}
+
+fn run(paths: ?[]const []const u8, repo: ?[]const u8) !void {
+    std.debug.print("running\n", .{});
+    if (paths) |ps| {
+        std.debug.print("paths: |", .{});
+        for (ps) |p| {
+            std.debug.print(" {s} |", .{p});
+        }
+        std.debug.print("\n", .{});
+    }
+    if (repo) |r| std.debug.print("repo: {s}\n", .{r});
 }
