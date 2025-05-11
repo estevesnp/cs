@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
 const cli = @import("cli.zig");
@@ -120,6 +121,8 @@ fn printConfig(arena: *std.heap.ArenaAllocator) !void {
 }
 
 fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
+    assert(paths.len > 0);
+
     const gpa = arena.allocator();
 
     const cfg_file, var cfg = config.getAndTruncateConfig(arena) catch |err|
@@ -147,6 +150,8 @@ fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
 }
 
 fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8) !void {
+    assert(paths.len > 0);
+
     const gpa = arena.allocator();
 
     const cfg_file, var cfg = config.getAndTruncateConfig(arena) catch |err|
@@ -190,6 +195,8 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts) !void {
         abort("error parsing config: {s}\n", .{@errorName(err)});
 
     const sources = if (opts.paths) |paths| blk: {
+        assert(paths.len > 0);
+
         const s = try gpa.alloc(Source, paths.len);
         for (paths, 0..) |path, idx| {
             s[idx] = .{ .root = path };

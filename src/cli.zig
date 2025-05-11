@@ -1,5 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
+const assert = std.debug.assert;
 
 /// options
 pub const Command = union(enum) {
@@ -41,6 +42,8 @@ pub const Error = error{
 /// parses CLI args, assuming first arg is the executable name
 /// returned Command union must have the same lifetime as passed in args
 pub fn parseArgs(args: []const []const u8) Error!Command {
+    assert(args.len > 0);
+
     var paths: ?[]const []const u8 = null;
     var repo: ?[]const u8 = null;
     var preview_cmd: ?[]const u8 = null;

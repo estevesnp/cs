@@ -1,5 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
+
 const Source = @import("config.zig").Source;
 
 const Walker = @This();
@@ -7,11 +9,13 @@ const Walker = @This();
 arena: std.heap.ArenaAllocator,
 sources: []const Source,
 
-git_projects: std.ArrayListUnmanaged([]const u8) = .empty,
+git_projects: std.StringArrayHashMapUnmanaged(void) = .empty,
 path_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 to_check_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 
 pub fn init(allocator: Allocator, sources: []const Source) Walker {
+    assert(sources.len > 0);
+
     return .{
         .sources = sources,
         .arena = std.heap.ArenaAllocator.init(allocator),
@@ -23,6 +27,8 @@ pub fn deinit(self: *Walker) void {
 }
 
 pub fn parseRoots(self: *Walker) ![]const []const u8 {
+    assert(self.sources.len > 0);
+
     for (self.sources) |source| {
         if (!std.fs.path.isAbsolute(source.root)) return error.InvalidPath;
 
@@ -35,7 +41,7 @@ pub fn parseRoots(self: *Walker) ![]const []const u8 {
         try self.recurse(root_dir, source.depth, 0);
     }
 
-    return self.git_projects.items;
+    return self.git_projects.keys();
 }
 
 fn recurse(self: *Walker, dir: std.fs.Dir, max_depth: usize, depth: usize) !void {
@@ -48,7 +54,7 @@ fn recurse(self: *Walker, dir: std.fs.Dir, max_depth: usize, depth: usize) !void
     var iter = dir.iterate();
     while (try iter.next()) |next| {
         if (std.mem.eql(u8, next.name, ".git")) {
-            try self.git_projects.append(allocator, try std.fs.path.join(allocator, self.path_stack.items));
+            _ = try self.git_projects.getOrPut(allocator, try std.fs.path.join(allocator, self.path_stack.items));
             return;
         }
 
