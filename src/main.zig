@@ -206,35 +206,34 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts) !void {
     } else cfg.sources;
 
     var walker: Walker = .init(gpa, sources);
-    const repos = try walker.parseRoots();
+    const repo_paths = try walker.parseRoots();
 
-    var query: ?[]const u8 = null;
-
-    if (opts.repo) |repo_name| {
-        var found: ?[]const u8 = null;
-        query = repo_name;
-
-        for (repos) |repo_path| {
-            if (std.mem.eql(u8, fs.path.basename(repo_path), repo_name)) {
-                if (found == null) {
-                    found = repo_path;
-                    continue;
-                }
-
-                found = null;
-                break;
-            }
+    const repo_path: ?[]const u8 = blk: {
+        if (opts.repo) |repo_name| {
+            if (searchForBasename(repo_name, repo_paths)) |found| break :blk found;
         }
+        break :blk try fzf.runProcess(gpa, repo_paths, opts.preview_cmd, opts.repo);
+    };
 
-        if (found) |repo_path| {
-            try stdout.print("found: {s}\n", .{repo_path});
-            return;
+    if (repo_path == null) std.process.exit(1);
+
+    try stdout.print("chose: {s}\n", .{repo_path.?});
+}
+
+/// searches for a path basename in a list of paths
+/// returns null if it wasn't found or if there were more than one matching paths
+fn searchForBasename(basename: []const u8, paths: []const []const u8) ?[]const u8 {
+    var found: ?[]const u8 = null;
+    for (paths) |path| {
+        if (std.mem.eql(u8, fs.path.basename(path), basename)) {
+            if (found == null) {
+                found = path;
+                continue;
+            }
+            return null;
         }
     }
-
-    const repo_path = try fzf.runProcess(gpa, repos, opts.preview_cmd, query) orelse return;
-
-    try stdout.print("chose: {s}\n", .{repo_path});
+    return found;
 }
 
 fn abort(comptime fmt: []const u8, args: anytype) noreturn {
@@ -244,4 +243,13 @@ fn abort(comptime fmt: []const u8, args: anytype) noreturn {
 
 test "ref all decls" {
     std.testing.refAllDeclsRecursive(@This());
+}
+
+test searchForBasename {
+    const repos: []const []const u8 = &.{ "/a/b/c", "/a/b/d", "/a/b/e", "/c/d/e" };
+
+    try std.testing.expectEqual("/a/b/c", searchForBasename("c", repos));
+    try std.testing.expectEqual("/a/b/d", searchForBasename("d", repos));
+    try std.testing.expectEqual(null, searchForBasename("b", repos));
+    try std.testing.expectEqual(null, searchForBasename("e", repos));
 }
