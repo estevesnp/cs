@@ -19,6 +19,22 @@ const SourceSet = std.ArrayHashMapUnmanaged(Source, void, Source.Context, true);
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 
+pub const Diag = struct {
+    stream: std.io.AnyWriter,
+
+    pub const stderr_stream: Diag = .{ .stream = stderr.any() };
+
+    pub fn init(stream: std.io.AnyWriter) Diag {
+        return .{ .stream = stream };
+    }
+
+    pub fn report(self: *Diag, comptime fmt: []const u8, args: anytype) void {
+        self.stream.print(fmt, args) catch |err| {
+            std.debug.print("couldn't write to stream: {s}\n", .{@errorName(err)});
+        };
+    }
+};
+
 const USAGE =
     \\usage: cs [repo] [flags]
     \\
@@ -55,10 +71,12 @@ pub fn main() !void {
         _ = debug_allocator.deinit();
     };
 
-    try start(gpa);
+    var diag: Diag = .stderr_stream;
+
+    try start(gpa, &diag);
 }
 
-fn start(allocator: Allocator) !void {
+fn start(allocator: Allocator, diag: ?*Diag) !void {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
 
@@ -66,8 +84,8 @@ fn start(allocator: Allocator) !void {
 
     const args = try std.process.argsAlloc(gpa);
 
-    const cmd = cli.parseArgs(args) catch |err| {
-        stderr.print("error parsing arguments: {s}\n\n", .{@errorName(err)}) catch {};
+    const cmd = cli.parseArgs(args, diag) catch |err| {
+        stderr.print("\nerror parsing arguments: {s}\n\n", .{@errorName(err)}) catch {};
         stderr.writeAll(USAGE) catch {};
         std.process.exit(1);
     };

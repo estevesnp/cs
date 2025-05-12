@@ -1,6 +1,9 @@
 const std = @import("std");
+const root = @import("root");
 const mem = std.mem;
 const assert = std.debug.assert;
+
+const Diag = @import("main.zig").Diag;
 
 /// options
 pub const Command = union(enum) {
@@ -41,7 +44,7 @@ pub const Error = error{
 
 /// parses CLI args, assuming first arg is the executable name
 /// returned Command union must have the same lifetime as passed in args
-pub fn parseArgs(args: []const []const u8) Error!Command {
+pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
     assert(args.len > 0);
 
     var paths: ?[]const []const u8 = null;
@@ -53,71 +56,91 @@ pub fn parseArgs(args: []const []const u8) Error!Command {
     while (iter.next()) |arg| {
         if (eqlAny(&.{ "-h", "--help" }, arg)) {
             if (paths != null or repo != null or !iter.isEmpty()) {
+                if (diag) |d| d.report("can't pass arguments while using -h/--help flag\n", .{});
                 return Error.IllegalArgument;
             }
 
             return .{ .help = {} };
         } else if (mem.eql(u8, arg, "--config")) {
             if (paths != null or repo != null or !iter.isEmpty()) {
+                if (diag) |d| d.report("can't pass arguments while using --config flag\n", .{});
                 return Error.IllegalArgument;
             }
 
             return .{ .config = {} };
         } else if (eqlAny(&.{ "-s", "--set-paths" }, arg)) {
             if (paths != null or repo != null) {
+                if (diag) |d| d.report("can't pass other arguments while using -s/--set-paths flag\n", .{});
                 return Error.IllegalArgument;
             }
 
             const set_paths = parsePaths(&iter);
 
             if (set_paths.len == 0) {
+                if (diag) |d| d.report("no arguments passed to -s/--set-paths flag\n", .{});
                 return Error.NoArguments;
             }
             if (!iter.isEmpty()) {
+                if (diag) |d| d.report("can't pass other arguments while using -s/--set-paths flag\n", .{});
                 return Error.IllegalArgument;
             }
 
             return .{ .set_paths = set_paths };
         } else if (eqlAny(&.{ "-a", "--add-paths" }, arg)) {
             if (paths != null or repo != null) {
+                if (diag) |d| d.report("can't pass other arguments while using -a/--add-paths flag\n", .{});
                 return Error.IllegalArgument;
             }
 
             const add_paths = parsePaths(&iter);
 
             if (add_paths.len == 0) {
+                if (diag) |d| d.report("no arguments passed to -a/--add-paths flag\n", .{});
                 return Error.NoArguments;
             }
+
             if (!iter.isEmpty()) {
+                if (diag) |d| d.report("can't pass other arguments while using -a/--add-paths flag\n", .{});
                 return Error.IllegalArgument;
             }
 
             return .{ .add_paths = add_paths };
         } else if (eqlAny(&.{ "-p", "--paths" }, arg)) {
             if (paths != null) {
+                if (diag) |d| d.report("can't repeat -p/--paths flag\n", .{});
                 return Error.RepeatedArgument;
             }
 
             paths = parsePaths(&iter);
 
             if (paths.?.len == 0) {
+                if (diag) |d| d.report("no arguments passed to -p/--paths flag\n", .{});
                 return Error.NoArguments;
             }
         } else if (std.mem.eql(u8, arg, "--preview")) {
             if (preview_cmd != null) {
+                if (diag) |d| d.report("can't repeat --preview flag\n", .{});
                 return Error.RepeatedArgument;
             }
 
-            const prev = iter.next() orelse return Error.NoArguments;
-            if (isFlagArgument(prev)) return Error.NoArguments;
+            const prev = iter.next() orelse {
+                if (diag) |d| d.report("no argument passed to --preview flag\n", .{});
+                return Error.NoArguments;
+            };
+            if (isFlagArgument(prev)) {
+                if (diag) |d| d.report("no argument passed to --preview flag\n", .{});
+                return Error.NoArguments;
+            }
 
             preview_cmd = prev;
         } else {
             if (isFlagArgument(arg)) {
+                if (diag) |d| d.report("unkown flag: {s}\n", .{arg});
                 return Error.UnknownFlag;
             }
 
             if (repo != null) {
+                if (diag) |d| d.report("can't pass more than one repo to match", .{});
                 return Error.RepeatedArgument;
             }
 
@@ -254,106 +277,106 @@ fn testParsePaths(args: []const []const u8, expected: []const []const u8) !void 
 }
 
 test "parseArgs help" {
-    try std.testing.expectEqual(Command{ .help = {} }, try parseArgs(&.{ "cs", "-h" }));
-    try std.testing.expectEqual(Command{ .help = {} }, try parseArgs(&.{ "cs", "--help" }));
+    try std.testing.expectEqual(Command{ .help = {} }, try parseArgs(&.{ "cs", "-h" }, null));
+    try std.testing.expectEqual(Command{ .help = {} }, try parseArgs(&.{ "cs", "--help" }, null));
 
-    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "--help", "a" }));
-    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "a", "--help" }));
+    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "--help", "a" }, null));
+    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "a", "--help" }, null));
 }
 
 test "parseArgs config" {
-    try std.testing.expectEqual(Command{ .config = {} }, try parseArgs(&.{ "cs", "--config" }));
+    try std.testing.expectEqual(Command{ .config = {} }, try parseArgs(&.{ "cs", "--config" }, null));
 
-    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "--config", "a" }));
-    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "a", "--config" }));
+    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "--config", "a" }, null));
+    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "a", "--config" }, null));
 }
 
 test "parseArgs set_paths" {
     {
-        const cmd = try parseArgs(&.{ "cs", "-s", "a", "b", "c" });
+        const cmd = try parseArgs(&.{ "cs", "-s", "a", "b", "c" }, null);
         try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.set_paths);
     }
     {
-        const cmd = try parseArgs(&.{ "cs", "--set-paths", "a" });
+        const cmd = try parseArgs(&.{ "cs", "--set-paths", "a" }, null);
         try std.testing.expectEqualSlices([]const u8, &.{"a"}, cmd.set_paths);
     }
 
-    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-s" }));
-    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-s", "-h" }));
-    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "-s", "a", "-h" }));
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-s" }, null));
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-s", "-h" }, null));
+    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "-s", "a", "-h" }, null));
 }
 
 test "parseArgs add_paths" {
     {
-        const cmd = try parseArgs(&.{ "cs", "-a", "a", "b", "c" });
+        const cmd = try parseArgs(&.{ "cs", "-a", "a", "b", "c" }, null);
         try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.add_paths);
     }
     {
-        const cmd = try parseArgs(&.{ "cs", "--add-paths", "a" });
+        const cmd = try parseArgs(&.{ "cs", "--add-paths", "a" }, null);
         try std.testing.expectEqualSlices([]const u8, &.{"a"}, cmd.add_paths);
     }
 
-    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-a" }));
-    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-a", "-h" }));
-    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "-a", "a", "-h" }));
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-a" }, null));
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-a", "-h" }, null));
+    try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "-a", "a", "-h" }, null));
 }
 
 test "parseArgs run" {
     { // repo, paths, preview
-        const cmd = try parseArgs(&.{ "cs", "repo", "-p", "a", "b", "c", "--preview", "ls {}" });
+        const cmd = try parseArgs(&.{ "cs", "repo", "-p", "a", "b", "c", "--preview", "ls {}" }, null);
         try std.testing.expectEqualStrings("repo", cmd.run.repo.?);
         try std.testing.expectEqualStrings("ls {}", cmd.run.preview_cmd.?);
         try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.run.paths.?);
     }
     { // repo, paths
-        const cmd = try parseArgs(&.{ "cs", "repo", "-p", "a", "b", "c" });
+        const cmd = try parseArgs(&.{ "cs", "repo", "-p", "a", "b", "c" }, null);
         try std.testing.expectEqualStrings("repo", cmd.run.repo.?);
         try std.testing.expectEqual(null, cmd.run.preview_cmd);
         try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.run.paths.?);
     }
     { // preview, paths
-        const cmd = try parseArgs(&.{ "cs", "--preview", "ls {}", "--paths", "a", "b", "c" });
+        const cmd = try parseArgs(&.{ "cs", "--preview", "ls {}", "--paths", "a", "b", "c" }, null);
         try std.testing.expectEqual(null, cmd.run.repo);
         try std.testing.expectEqualStrings("ls {}", cmd.run.preview_cmd.?);
         try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.run.paths.?);
     }
     { // paths
-        const cmd = try parseArgs(&.{ "cs", "--paths", "a", "b", "c" });
+        const cmd = try parseArgs(&.{ "cs", "--paths", "a", "b", "c" }, null);
         try std.testing.expectEqual(null, cmd.run.repo);
         try std.testing.expectEqual(null, cmd.run.preview_cmd);
         try std.testing.expectEqualSlices([]const u8, &.{ "a", "b", "c" }, cmd.run.paths.?);
     }
     { // repo
-        const cmd = try parseArgs(&.{ "cs", "repo" });
+        const cmd = try parseArgs(&.{ "cs", "repo" }, null);
         try std.testing.expectEqualStrings("repo", cmd.run.repo.?);
         try std.testing.expectEqual(null, cmd.run.preview_cmd);
         try std.testing.expectEqual(null, cmd.run.paths);
     }
     { // preview
-        const cmd = try parseArgs(&.{ "cs", "--preview", "ls {}" });
+        const cmd = try parseArgs(&.{ "cs", "--preview", "ls {}" }, null);
         try std.testing.expectEqual(null, cmd.run.repo);
         try std.testing.expectEqualStrings("ls {}", cmd.run.preview_cmd.?);
         try std.testing.expectEqual(null, cmd.run.paths);
     }
     { // null
-        const cmd = try parseArgs(&.{"cs"});
+        const cmd = try parseArgs(&.{"cs"}, null);
         try std.testing.expectEqual(null, cmd.run.repo);
         try std.testing.expectEqual(null, cmd.run.preview_cmd);
         try std.testing.expectEqual(null, cmd.run.paths);
     }
 
-    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-p" }));
-    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "repo", "-p" }));
-    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "repo1", "repo2" }));
-    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "repo1", "repo2", "-p", "a" }));
-    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "-p", "a", "-p", "b" }));
-    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "-p", "a", "-p" }));
-    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "repo", "-p", "a", "-p", "b" }));
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "-p" }, null));
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "repo", "-p" }, null));
+    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "repo1", "repo2" }, null));
+    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "repo1", "repo2", "-p", "a" }, null));
+    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "-p", "a", "-p", "b" }, null));
+    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "-p", "a", "-p" }, null));
+    try std.testing.expectError(Error.RepeatedArgument, parseArgs(&.{ "cs", "repo", "-p", "a", "-p", "b" }, null));
 
-    try std.testing.expectError(Error.UnknownFlag, parseArgs(&.{ "cs", "-q" }));
-    try std.testing.expectError(Error.UnknownFlag, parseArgs(&.{ "cs", "--idk" }));
-    try std.testing.expectError(Error.UnknownFlag, parseArgs(&.{ "cs", "repo", "--idk" }));
+    try std.testing.expectError(Error.UnknownFlag, parseArgs(&.{ "cs", "-q" }, null));
+    try std.testing.expectError(Error.UnknownFlag, parseArgs(&.{ "cs", "--idk" }, null));
+    try std.testing.expectError(Error.UnknownFlag, parseArgs(&.{ "cs", "repo", "--idk" }, null));
 
-    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "--preview" }));
-    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "--preview", "-p", "a" }));
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "--preview" }, null));
+    try std.testing.expectError(Error.NoArguments, parseArgs(&.{ "cs", "--preview", "-p", "a" }, null));
 }
