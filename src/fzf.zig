@@ -30,6 +30,7 @@ pub fn runProcess(
     };
 
     var fzf_process: std.process.Child = .init(&args, gpa);
+
     fzf_process.stdin_behavior = .Pipe;
     fzf_process.stdout_behavior = .Pipe;
 
@@ -63,13 +64,13 @@ pub fn runProcess(
         .Exited => |error_code| switch (error_code) {
             0 => try gpa.dupe(u8, path),
             NO_MATCH_EXIT_CODE, INTERRUPT_EXIT_CODE => null,
-            else => |c| {
-                if (diag) |d| d.report("fzf exited with error code {d}\n", .{c});
+            else => {
+                if (diag) |d| d.report("fzf exited with error code {d}\n", .{error_code});
                 return error.NonZeroExitCode;
             },
         },
         else => |t| {
-            if (diag) |d| d.report("fzf failed: {any}\n", .{@tagName(t)});
+            if (diag) |d| d.report("fzf failed: {any}\n", .{t});
             return error.BadTermination;
         },
     };

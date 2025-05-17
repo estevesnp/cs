@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 const cli = @import("cli.zig");
 const config = @import("config.zig");
 const fzf = @import("fzf.zig");
+const tmux = @import("tmux.zig");
 
 const Walker = @import("Walker.zig");
 const Config = config.Config;
@@ -61,6 +62,7 @@ const USAGE =
 ;
 
 pub fn main() !void {
+    //defer std.debug.print("exiting main...\n", .{});
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 
     const gpa, const is_debug = switch (builtin.mode) {
@@ -102,7 +104,10 @@ fn printHelp() !void {
 fn printConfig(arena: *std.heap.ArenaAllocator, diag: ?*Diag) !void {
     const gpa = arena.allocator();
 
-    const file_path = try config.getConfigPath(gpa);
+    var env_map = try std.process.getEnvMap(gpa);
+    defer env_map.deinit();
+
+    const file_path = try config.getConfigPath(gpa, &env_map);
     try stdout.print("config path: {s}\n", .{file_path});
 
     var buf_writer = std.io.bufferedWriter(stdout);
@@ -156,7 +161,10 @@ fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8, diag: ?*
 
     const gpa = arena.allocator();
 
-    const cfg_file, var cfg = try config.getAndTruncateConfig(arena, diag);
+    var env_map = try std.process.getEnvMap(gpa);
+    defer env_map.deinit();
+
+    const cfg_file, var cfg = try config.getAndTruncateConfig(arena, &env_map, diag);
     defer cfg_file.close();
 
     var source_set: SourceSet = .empty;
@@ -176,7 +184,10 @@ fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8, diag: ?*
 
     const gpa = arena.allocator();
 
-    const cfg_file, var cfg = try config.getAndTruncateConfig(arena, diag);
+    var env_map = try std.process.getEnvMap(gpa);
+    defer env_map.deinit();
+
+    const cfg_file, var cfg = try config.getAndTruncateConfig(arena, &env_map, diag);
     defer cfg_file.close();
 
     var source_set: SourceSet = .empty;
@@ -198,7 +209,10 @@ fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8, diag: ?*
 fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts, diag: ?*Diag) !void {
     const gpa = arena.allocator();
 
-    const cfg_file = try config.createOrOpen();
+    var env_map = try std.process.getEnvMap(gpa);
+    defer env_map.deinit();
+
+    const cfg_file = try config.createOrOpen(&env_map);
     defer cfg_file.close();
 
     var json_reader = std.json.reader(gpa, cfg_file.reader());
@@ -229,7 +243,7 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts, diag: ?*Diag) !void {
 
     if (repo_path == null) std.process.exit(1);
 
-    try stdout.print("chose: {s}\n", .{repo_path.?});
+    try tmux.createSession(gpa, repo_path.?, fs.path.basename(repo_path.?), &env_map, diag);
 }
 
 /// searches for a path basename in a list of paths

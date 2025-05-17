@@ -44,8 +44,8 @@ pub const Config = struct {
 pub const APP_CFG_DIR = "cs";
 pub const APP_CFG_FILE = "config.json";
 
-pub fn createOrOpen() !std.fs.File {
-    const cfg_paths = getConfigDirParts();
+pub fn createOrOpen(env_map: *std.process.EnvMap) !std.fs.File {
+    const cfg_paths = getConfigDirParts(env_map);
 
     var base_dir = try std.fs.openDirAbsolute(cfg_paths.base_path, .{ .iterate = true });
     defer base_dir.close();
@@ -56,8 +56,8 @@ pub fn createOrOpen() !std.fs.File {
     return cfg_dir.createFile(APP_CFG_FILE, .{ .read = true, .truncate = false });
 }
 
-pub fn getConfigPath(gpa: Allocator) ![]const u8 {
-    const parts = getConfigDirParts();
+pub fn getConfigPath(gpa: Allocator, env_map: *std.process.EnvMap) ![]const u8 {
+    const parts = getConfigDirParts(env_map);
     return std.fs.path.join(gpa, &.{ parts.base_path, parts.sub_path, APP_CFG_FILE });
 }
 
@@ -66,26 +66,26 @@ const CfgPath = struct {
     sub_path: []const u8,
 };
 
-fn getConfigDirParts() CfgPath {
+fn getConfigDirParts(env_map: *std.process.EnvMap) CfgPath {
     if (os_tag == .windows) return .{
-        .base_path = std.process.getenvW("APPDATA").?,
+        .base_path = env_map.get("APPDATA").?,
         .sub_path = APP_CFG_DIR,
     };
 
-    if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg| return .{
+    if (env_map.get("XDG_CONFIG_HOME")) |xdg| return .{
         .base_path = xdg,
         .sub_path = APP_CFG_DIR,
     };
 
     return .{
-        .base_path = std.posix.getenv("HOME").?,
+        .base_path = env_map.get("HOME").?,
         .sub_path = ".config/" ++ APP_CFG_DIR,
     };
 }
 
-pub fn getAndTruncateConfig(arena: *std.heap.ArenaAllocator, diag: ?*Diag) !struct { std.fs.File, Config } {
+pub fn getAndTruncateConfig(arena: *std.heap.ArenaAllocator, env_map: *std.process.EnvMap, diag: ?*Diag) !struct { std.fs.File, Config } {
     const gpa = arena.allocator();
-    var cfg_file = try createOrOpen();
+    var cfg_file = try createOrOpen(env_map);
     errdefer cfg_file.close();
 
     if (try cfg_file.getEndPos() == 0) return .{ cfg_file, .empty };

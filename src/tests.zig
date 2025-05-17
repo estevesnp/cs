@@ -4,4 +4,5 @@ comptime {
     _ = @import("config.zig");
     _ = @import("Walker.zig");
     _ = @import("fzf.zig");
+    _ = @import("tmux.zig");
 }
