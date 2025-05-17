@@ -7,6 +7,7 @@ const assert = std.debug.assert;
 
 const cli = @import("cli.zig");
 const Options = cli.Options;
+const Diag = @import("main.zig").Diag;
 
 const os_tag = builtin.os.tag;
 
@@ -82,17 +83,20 @@ fn getConfigDirParts() CfgPath {
     };
 }
 
-pub fn getAndTruncateConfig(arena: *std.heap.ArenaAllocator) !struct { std.fs.File, Config } {
+pub fn getAndTruncateConfig(arena: *std.heap.ArenaAllocator, diag: ?*Diag) !struct { std.fs.File, Config } {
     const gpa = arena.allocator();
     var cfg_file = try createOrOpen();
+    errdefer cfg_file.close();
 
     if (try cfg_file.getEndPos() == 0) return .{ cfg_file, .empty };
 
     var json_reader = std.json.reader(gpa, cfg_file.reader());
     defer json_reader.deinit();
 
-    const cfg = std.json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{}) catch
-        return error.ParsingConfig;
+    const cfg = std.json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{}) catch |err| {
+        if (diag) |d| d.report("error parsing config\n", .{});
+        return err;
+    };
 
     try cfg_file.setEndPos(0);
     try cfg_file.seekTo(0);

@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const Diag = @import("main.zig").Diag;
+
 pub const NO_MATCH_EXIT_CODE: u8 = 1;
 pub const INTERRUPT_EXIT_CODE: u8 = 130;
 
@@ -13,6 +15,7 @@ pub fn runProcess(
     dirs: []const []const u8,
     preview_cmd: ?[]const u8,
     query: ?[]const u8,
+    diag: ?*Diag,
 ) !?[]u8 {
     const args = [_][]const u8{
         "fzf",
@@ -43,7 +46,7 @@ pub fn runProcess(
     fzf_process.stdin.?.close();
     fzf_process.stdin = null;
 
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    var buf: [std.fs.max_path_bytes + 1]u8 = undefined;
     var fixed_stream = std.io.fixedBufferStream(&buf);
 
     const reader = fzf_process.stdout.?.reader();
@@ -60,9 +63,15 @@ pub fn runProcess(
         .Exited => |error_code| switch (error_code) {
             0 => try gpa.dupe(u8, path),
             NO_MATCH_EXIT_CODE, INTERRUPT_EXIT_CODE => null,
-            else => error.NonZeroExitCode,
+            else => |c| {
+                if (diag) |d| d.report("fzf exited with error code {d}\n", .{c});
+                return error.NonZeroExitCode;
+            },
         },
-        else => return error.BadTermination,
+        else => |t| {
+            if (diag) |d| d.report("fzf failed: {any}\n", .{@tagName(t)});
+            return error.BadTermination;
+        },
     };
 }
 

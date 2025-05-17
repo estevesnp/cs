@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const Source = @import("config.zig").Source;
+const Diag = @import("main.zig").Diag;
 
 const Walker = @This();
 
@@ -26,12 +27,15 @@ pub fn deinit(self: *Walker) void {
     self.arena.deinit();
 }
 
-pub fn parseRoots(self: *Walker) ![]const []const u8 {
+pub fn parseRoots(self: *Walker, diag: ?*Diag) ![]const []const u8 {
     assert(self.sources.len > 0);
     const gpa = self.arena.allocator();
 
     for (self.sources) |source| {
-        if (!std.fs.path.isAbsolute(source.root)) return error.InvalidPath;
+        if (!std.fs.path.isAbsolute(source.root)) {
+            if (diag) |d| d.report("invalid path: {s}\n", .{source.root});
+            return error.InvalidPath;
+        }
 
         try self.path_stack.append(gpa, source.root);
         defer self.path_stack.clearRetainingCapacity();
@@ -99,7 +103,7 @@ test "parseRoots" {
     var walker: Walker = .init(gpa, &.{ .{ .root = root_1_path }, .{ .root = root_2_path } });
     defer walker.deinit();
 
-    const git_paths = try walker.parseRoots();
+    const git_paths = try walker.parseRoots(null);
 
     try std.testing.expectEqual(8, git_paths.len);
 
