@@ -16,6 +16,7 @@ flags:
   -h, --help                    print this message
   --config                      print config and config path
   --preview <str>               preview command to pass to fzf
+  --script  <str>               script to run on new tmux session
   -p, --paths     <path> [...]  choose paths to search for in this run
   -s, --set-paths <path> [...]  update config setting paths to search for
   -a, --add-paths <path> [...]  update config adding to paths to search for
@@ -34,14 +35,15 @@ example config:
 {
   "sources": [
     {
-      "root": "/Users/esteves/proj",
+      "root": "/home/esteves/proj",
       "depth": 10
     },
     {
-      "root": "/Users/esteves/tmp",
+      "root": "/home/esteves/tmp",
       "depth": 10
     }
   ],
-  "preview_cmd": "eza -la --color=always {}"
+  "preview_cmd": "eza -la --color=always {}",
+  "tmux_script": "new-window; previous-window; send-keys 'nvim .' C-m"
 }
 ```

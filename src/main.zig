@@ -49,6 +49,7 @@ const USAGE =
     \\  -h, --help                    print this message
     \\  --config                      print config and config path
     \\  --preview <str>               preview command to pass to fzf
+    \\  --script  <str>               script to run on new tmux session
     \\  -p, --paths     <path> [...]  choose paths to search for in this run
     \\  -s, --set-paths <path> [...]  update config setting paths to search for
     \\  -a, --add-paths <path> [...]  update config adding to paths to search for
@@ -139,6 +140,12 @@ fn printConfig(arena: *std.heap.ArenaAllocator, diag: ?*Diag) !void {
         try writer.print("\npreview command: '{s}'\n", .{preview});
     } else {
         try writer.writeAll("\nno preview command\n");
+    }
+
+    if (cfg.tmux_script) |script| {
+        try writer.print("\ntmux script: '{s}'\n", .{script});
+    } else {
+        try writer.writeAll("\nno tmux script\n");
     }
 
     try buf_writer.flush();
@@ -254,11 +261,24 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts, diag: ?*Diag) !void {
         if (opts.repo) |repo_name| {
             if (searchForBasename(repo_name, repo_paths)) |found| break :blk found;
         }
-        const path = try fzf.runProcess(gpa, repo_paths, opts.preview_cmd, opts.repo, diag);
+        const path = try fzf.runProcess(
+            gpa,
+            repo_paths,
+            opts.preview_cmd orelse cfg.preview_cmd,
+            opts.repo,
+            diag,
+        );
         break :blk path orelse std.process.exit(1);
     };
 
-    try tmux.createSession(gpa, repo_path, fs.path.basename(repo_path), &env_map, diag);
+    try tmux.createSession(
+        gpa,
+        repo_path,
+        fs.path.basename(repo_path),
+        opts.tmux_script orelse cfg.tmux_script,
+        &env_map,
+        diag,
+    );
 }
 
 /// searches for a path basename in a list of paths

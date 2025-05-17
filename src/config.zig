@@ -29,13 +29,20 @@ pub const Source = struct {
 
 /// config
 pub const Config = struct {
-    pub const empty: Config = .{ .sources = &.{}, .preview_cmd = null };
+    pub const empty: Config = .{
+        .sources = &.{},
+        .preview_cmd = null,
+        .tmux_script = null,
+    };
 
     /// sources to search for repos
     sources: []Source,
 
     /// optional preview command provided to fzf
     preview_cmd: ?[]const u8 = null,
+
+    /// optional script to run on new tmux session
+    tmux_script: ?[]const u8 = null,
 };
 
 pub const APP_CFG_DIR = "cs";

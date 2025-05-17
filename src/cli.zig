@@ -33,6 +33,9 @@ pub const RunOpts = struct {
 
     /// optional preview command, overrides config
     preview_cmd: ?[]const u8,
+
+    /// optional script to run on new tmux session, overrides config
+    tmux_script: ?[]const u8,
 };
 
 pub const Error = error{
@@ -50,26 +53,27 @@ pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
     var paths: ?[]const []const u8 = null;
     var repo: ?[]const u8 = null;
     var preview_cmd: ?[]const u8 = null;
+    var tmux_script: ?[]const u8 = null;
 
     var iter: Iterator([]const u8) = .init(args[1..]);
 
     while (iter.next()) |arg| {
         if (eqlAny(&.{ "-h", "--help" }, arg)) {
-            if (paths != null or repo != null or !iter.isEmpty()) {
+            if (paths != null or repo != null or preview_cmd != null or tmux_script != null or !iter.isEmpty()) {
                 if (diag) |d| d.report("can't pass arguments while using -h/--help flag\n", .{});
                 return Error.IllegalArgument;
             }
 
             return .{ .help = {} };
         } else if (mem.eql(u8, arg, "--config")) {
-            if (paths != null or repo != null or !iter.isEmpty()) {
+            if (paths != null or repo != null or preview_cmd != null or tmux_script != null or !iter.isEmpty()) {
                 if (diag) |d| d.report("can't pass arguments while using --config flag\n", .{});
                 return Error.IllegalArgument;
             }
 
             return .{ .config = {} };
         } else if (eqlAny(&.{ "-s", "--set-paths" }, arg)) {
-            if (paths != null or repo != null) {
+            if (paths != null or repo != null or preview_cmd != null or tmux_script != null) {
                 if (diag) |d| d.report("can't pass other arguments while using -s/--set-paths flag\n", .{});
                 return Error.IllegalArgument;
             }
@@ -87,7 +91,7 @@ pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
 
             return .{ .set_paths = set_paths };
         } else if (eqlAny(&.{ "-a", "--add-paths" }, arg)) {
-            if (paths != null or repo != null) {
+            if (paths != null or repo != null or preview_cmd != null or tmux_script != null) {
                 if (diag) |d| d.report("can't pass other arguments while using -a/--add-paths flag\n", .{});
                 return Error.IllegalArgument;
             }
@@ -133,6 +137,22 @@ pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
             }
 
             preview_cmd = prev;
+        } else if (std.mem.eql(u8, arg, "--script")) {
+            if (tmux_script != null) {
+                if (diag) |d| d.report("can't repeat --script flag\n", .{});
+                return Error.RepeatedArgument;
+            }
+
+            const script = iter.next() orelse {
+                if (diag) |d| d.report("no argument passed to --script flag\n", .{});
+                return Error.NoArguments;
+            };
+            if (isFlagArgument(script)) {
+                if (diag) |d| d.report("no argument passed to --script flag\n", .{});
+                return Error.NoArguments;
+            }
+
+            tmux_script = script;
         } else {
             if (isFlagArgument(arg)) {
                 if (diag) |d| d.report("unkown flag: {s}\n", .{arg});
@@ -140,7 +160,7 @@ pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
             }
 
             if (repo != null) {
-                if (diag) |d| d.report("can't pass more than one repo to match", .{});
+                if (diag) |d| d.report("can't pass more than one repo to match\n", .{});
                 return Error.RepeatedArgument;
             }
 
@@ -153,6 +173,7 @@ pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
             .paths = paths,
             .repo = repo,
             .preview_cmd = preview_cmd,
+            .tmux_script = tmux_script,
         },
     };
 }

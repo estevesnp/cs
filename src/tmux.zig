@@ -8,6 +8,7 @@ pub fn createSession(
     gpa: std.mem.Allocator,
     repo_path: []const u8,
     session_name: []const u8,
+    startup_script: ?[]const u8,
     env_map: *process.EnvMap,
     diag: ?*Diag,
 ) !void {
@@ -49,10 +50,14 @@ pub fn createSession(
     }
 
     if (!session_exists) {
-        try writer.print("new-session -d -s {s} -c {s}\n", .{ session_name, repo_path });
+        try writer.print("new-session -s '{s}' -c '{s}'\n", .{ session_name, repo_path });
+
+        if (startup_script) |script| {
+            try writer.print("{s}\n", .{script});
+        }
     }
 
-    try writer.writeAll("kill-session\n\n");
+    try writer.writeAll("switch-client -l\n kill-session\n\n");
 
     switch (try control_process.wait()) {
         .Exited => |exit_code| switch (exit_code) {
