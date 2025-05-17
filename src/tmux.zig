@@ -64,7 +64,7 @@ pub fn createSession(
     }
 
     if (inside_session) {
-        var create_proc: process.Child = .init(&.{ "tmux", "new-session", "-d", "-s", session_name }, gpa);
+        var create_proc: process.Child = .init(&.{ "tmux", "new-session", "-d", "-s", session_name, "-c", path }, gpa);
         _ = try create_proc.spawnAndWait();
 
         return process.execve(gpa, &.{ "tmux", "switch-client", "-t", session_name }, env_map);
