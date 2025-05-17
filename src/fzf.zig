@@ -58,14 +58,12 @@ pub fn runProcess(
     };
     const path = buf[0..fixed_stream.pos];
 
-    const term = try fzf_process.wait();
-
-    return switch (term) {
-        .Exited => |error_code| switch (error_code) {
+    return switch (try fzf_process.wait()) {
+        .Exited => |exit_code| switch (exit_code) {
             0 => try gpa.dupe(u8, path),
             NO_MATCH_EXIT_CODE, INTERRUPT_EXIT_CODE => null,
             else => {
-                if (diag) |d| d.report("fzf exited with error code {d}\n", .{error_code});
+                if (diag) |d| d.report("fzf exited with error code {d}\n", .{exit_code});
                 return error.NonZeroExitCode;
             },
         },

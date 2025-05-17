@@ -234,16 +234,15 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts, diag: ?*Diag) !void {
     var walker: Walker = .init(gpa, sources);
     const repo_paths = try walker.parseRoots(diag);
 
-    const repo_path: ?[]const u8 = blk: {
+    const repo_path: []const u8 = blk: {
         if (opts.repo) |repo_name| {
             if (searchForBasename(repo_name, repo_paths)) |found| break :blk found;
         }
-        break :blk try fzf.runProcess(gpa, repo_paths, opts.preview_cmd, opts.repo, diag);
+        const path = try fzf.runProcess(gpa, repo_paths, opts.preview_cmd, opts.repo, diag);
+        break :blk path orelse std.process.exit(1);
     };
 
-    if (repo_path == null) std.process.exit(1);
-
-    try tmux.createSession(gpa, repo_path.?, fs.path.basename(repo_path.?), &env_map, diag);
+    try tmux.createSession(gpa, repo_path, fs.path.basename(repo_path), &env_map, diag);
 }
 
 /// searches for a path basename in a list of paths

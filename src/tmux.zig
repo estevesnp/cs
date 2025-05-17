@@ -5,45 +5,56 @@ const Diag = @import("main.zig").Diag;
 
 pub fn createSession(
     gpa: std.mem.Allocator,
-    path: []const u8,
+    repo_path: []const u8,
     session_name: []const u8,
     env_map: *process.EnvMap,
     diag: ?*Diag,
 ) !void {
     const args = &.{
         "tmux",
-        "list-sessions",
-        "-F",
-        "#{session_name}",
+        "-C",
+        "new-session",
     };
 
-    var ls_proc: process.Child = .init(args, gpa);
-    ls_proc.stdout_behavior = .Pipe;
-    ls_proc.stdin_behavior = .Ignore;
-    ls_proc.stderr_behavior = .Ignore;
+    var control_process = std.process.Child.init(args, gpa);
+    control_process.stdin_behavior = .Pipe;
+    control_process.stdout_behavior = .Pipe;
 
-    try ls_proc.spawn();
+    try control_process.spawn();
 
-    const reader = ls_proc.stdout.?.reader();
+    const writer = control_process.stdin.?.writer();
+    const reader = control_process.stdout.?.reader();
+
+    try writer.writeAll("list-sessions -F '#{session_name}'\n");
 
     var buf: [2048]u8 = undefined;
-
-    var found = false;
+    var reading_lines = false;
+    var session_exists = false;
     while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
+        if (line.len == 0) continue;
+        if (line[0] == '%') {
+            if (reading_lines) break;
+            continue;
+        }
+        reading_lines = true;
+
         if (std.mem.eql(u8, line, session_name)) {
-            found = true;
+            session_exists = true;
             break;
         }
     }
 
-    const term = try ls_proc.wait();
+    if (!session_exists) {
+        try writer.print("new-session -d -s {s} -c {s}\n", .{ session_name, repo_path });
+    }
 
-    const session_exists = switch (term) {
-        .Exited => |error_code| switch (error_code) {
-            0 => found,
-            1 => false,
+    try writer.writeAll("kill-session\n\n");
+
+    switch (try control_process.wait()) {
+        .Exited => |exit_code| switch (exit_code) {
+            0 => {},
             else => {
-                if (diag) |d| d.report("tmux exited with error code {d}\n", .{error_code});
+                if (diag) |d| d.report("tmux exited with error code {d}\n", .{exit_code});
                 return error.NonZeroExitCode;
             },
         },
@@ -51,26 +62,15 @@ pub fn createSession(
             if (diag) |d| d.report("tmux failed: {any}\n", .{t});
             return error.BadTermination;
         },
-    };
+    }
 
     const inside_session = env_map.get("TMUX") != null;
 
-    if (session_exists) {
-        if (inside_session) {
-            return process.execve(gpa, &.{ "tmux", "switch-client", "-t", session_name }, env_map);
-        }
-
-        return process.execve(gpa, &.{ "tmux", "attach-session", "-t", session_name }, env_map);
-    }
-
     if (inside_session) {
-        var create_proc: process.Child = .init(&.{ "tmux", "new-session", "-d", "-s", session_name, "-c", path }, gpa);
-        _ = try create_proc.spawnAndWait();
-
         return process.execve(gpa, &.{ "tmux", "switch-client", "-t", session_name }, env_map);
     }
 
-    return process.execve(gpa, &.{ "tmux", "new-session", "-s", session_name, "-c", path }, env_map);
+    return process.execve(gpa, &.{ "tmux", "attach-session", "-t", session_name }, env_map);
 }
 
 test "ref all decls" {
