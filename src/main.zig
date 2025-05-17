@@ -86,7 +86,7 @@ fn start(allocator: Allocator, diag: ?*Diag) !void {
 
     const args = try std.process.argsAlloc(gpa);
 
-    const cmd = cli.parseArgs(args, diag) catch abortDiag(diag, "\n" ++ USAGE, .{});
+    const cmd = cli.parseArgs(args, diag) catch abort(diag, "\n" ++ USAGE, .{});
 
     switch (cmd) {
         .help => try printHelp(),
@@ -114,8 +114,8 @@ fn printConfig(arena: *std.heap.ArenaAllocator, diag: ?*Diag) !void {
     const writer = buf_writer.writer();
 
     const cfg_file = fs.openFileAbsolute(file_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => abortDiag(diag, "\nno config file found\n", .{}),
-        else => abortDiag(diag, "\nerror opening config file: {s}\n", .{@errorName(err)}),
+        error.FileNotFound => abort(diag, "\nno config file found\n", .{}),
+        else => abort(diag, "\nerror opening config file: {s}\n", .{@errorName(err)}),
     };
     defer cfg_file.close();
 
@@ -123,7 +123,7 @@ fn printConfig(arena: *std.heap.ArenaAllocator, diag: ?*Diag) !void {
     defer json_reader.deinit();
 
     const cfg = std.json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{}) catch |err|
-        abortDiag(diag, "error parsing config: {s}\n", .{@errorName(err)});
+        abort(diag, "error parsing config: {s}\n", .{@errorName(err)});
 
     if (cfg.sources.len == 0) {
         try writer.writeAll("\nno search sources\n");
@@ -147,6 +147,8 @@ fn printConfig(arena: *std.heap.ArenaAllocator, diag: ?*Diag) !void {
 fn populateSources(gpa: Allocator, source_set: *SourceSet, paths: []const []const u8) !void {
     const cwd = std.fs.cwd();
     for (paths) |path| {
+        if (path.len == 0) continue;
+
         if (std.fs.path.isAbsolute(path)) {
             _ = try source_set.getOrPut(gpa, .{ .root = path });
         }
@@ -154,6 +156,10 @@ fn populateSources(gpa: Allocator, source_set: *SourceSet, paths: []const []cons
         const abs_path = try cwd.realpathAlloc(gpa, path);
         _ = try source_set.getOrPut(gpa, .{ .root = abs_path });
     }
+}
+
+fn saveConfig(cfg: Config, cfg_file: fs.File) !void {
+    try std.json.stringify(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, cfg_file.writer());
 }
 
 fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8, diag: ?*Diag) !void {
@@ -174,7 +180,7 @@ fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8, diag: ?*
 
     cfg.sources = source_set.keys();
 
-    try std.json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
+    try saveConfig(cfg, cfg_file);
 
     try stdout.writeAll("paths successfully set\n");
 }
@@ -201,7 +207,7 @@ fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8, diag: ?*
 
     cfg.sources = source_set.keys();
 
-    try std.json.stringify(cfg, .{ .whitespace = .indent_2 }, cfg_file.writer());
+    try saveConfig(cfg, cfg_file);
 
     try stdout.writeAll("paths successfully added\n");
 }
@@ -212,14 +218,16 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts, diag: ?*Diag) !void {
     var env_map = try std.process.getEnvMap(gpa);
     defer env_map.deinit();
 
-    const cfg_file = try config.createOrOpen(&env_map);
+    const cfg_file = try config.createOrOpenConfig(&env_map);
     defer cfg_file.close();
 
     var json_reader = std.json.reader(gpa, cfg_file.reader());
     defer json_reader.deinit();
 
-    const cfg = std.json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{}) catch |err|
-        abortDiag(diag, "error parsing config: {s}\n", .{@errorName(err)});
+    const cfg = std.json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{}) catch |err| switch (err) {
+        error.UnexpectedEndOfInput => abort(diag, "empty config. add search paths with --set-paths or --add-paths\n", .{}),
+        else => abort(diag, "error parsing config: {s}\n", .{@errorName(err)}),
+    };
 
     var source_set: SourceSet = .empty;
     defer source_set.deinit(gpa);
@@ -231,8 +239,16 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts, diag: ?*Diag) !void {
         break :blk source_set.keys();
     } else cfg.sources;
 
+    if (sources.len == 0) {
+        abort(diag, "no sources provided\n", .{});
+    }
+
     var walker: Walker = .init(gpa, sources);
     const repo_paths = try walker.parseRoots(diag);
+
+    if (repo_paths.len == 0) {
+        abort(diag, "no repos found\n", .{});
+    }
 
     const repo_path: []const u8 = blk: {
         if (opts.repo) |repo_name| {
@@ -261,13 +277,8 @@ fn searchForBasename(basename: []const u8, paths: []const []const u8) ?[]const u
     return found;
 }
 
-fn abortDiag(diag: ?*Diag, comptime fmt: []const u8, args: anytype) noreturn {
+fn abort(diag: ?*Diag, comptime fmt: []const u8, args: anytype) noreturn {
     if (diag) |d| d.report(fmt, args);
-    std.process.exit(1);
-}
-
-fn abort(comptime fmt: []const u8, args: anytype) noreturn {
-    stderr.print(fmt, args) catch {};
     std.process.exit(1);
 }
 

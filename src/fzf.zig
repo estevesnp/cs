@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const assert = std.debug.assert;
 
 const Diag = @import("main.zig").Diag;
 
@@ -7,8 +8,6 @@ pub const NO_MATCH_EXIT_CODE: u8 = 1;
 pub const INTERRUPT_EXIT_CODE: u8 = 130;
 
 const ls_preview = "ls -lah --color=always {}";
-const eza_preview = "eza -la --color=always {}";
-const cmd_preview = "cmd /C \"dir /a {}\"";
 
 pub fn runProcess(
     gpa: std.mem.Allocator,
@@ -17,6 +16,8 @@ pub fn runProcess(
     query: ?[]const u8,
     diag: ?*Diag,
 ) !?[]u8 {
+    assert(dirs.len > 0);
+
     const args = [_][]const u8{
         "fzf",
         "--header=choose a repo",
@@ -24,7 +25,7 @@ pub fn runProcess(
         "--scheme=path",
         "--preview-label=[ repository files ]",
         "--preview",
-        preview_cmd orelse getDefaultPreviewCommand(),
+        preview_cmd orelse ls_preview,
         "--query",
         query orelse "",
     };
@@ -71,13 +72,6 @@ pub fn runProcess(
             if (diag) |d| d.report("fzf failed: {any}\n", .{t});
             return error.BadTermination;
         },
-    };
-}
-
-fn getDefaultPreviewCommand() []const u8 {
-    return switch (builtin.os.tag) {
-        .windows => cmd_preview,
-        else => ls_preview,
     };
 }
 

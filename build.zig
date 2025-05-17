@@ -1,6 +1,10 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
+    if (builtin.os.tag == .windows) @compileError("tmux is not available on windows");
+    // TODO - add version
+
     const target = b.standardTargetOptions(.{});
 
     const optimize = b.standardOptimizeOption(.{});

@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 const json = std.json;
 const Allocator = std.mem.Allocator;
@@ -8,8 +7,6 @@ const assert = std.debug.assert;
 const cli = @import("cli.zig");
 const Options = cli.Options;
 const Diag = @import("main.zig").Diag;
-
-const os_tag = builtin.os.tag;
 
 /// source to search for repos
 pub const Source = struct {
@@ -44,7 +41,7 @@ pub const Config = struct {
 pub const APP_CFG_DIR = "cs";
 pub const APP_CFG_FILE = "config.json";
 
-pub fn createOrOpen(env_map: *std.process.EnvMap) !std.fs.File {
+pub fn createOrOpenConfig(env_map: *std.process.EnvMap) !std.fs.File {
     const cfg_paths = getConfigDirParts(env_map);
 
     var base_dir = try std.fs.openDirAbsolute(cfg_paths.base_path, .{ .iterate = true });
@@ -67,11 +64,6 @@ const CfgPath = struct {
 };
 
 fn getConfigDirParts(env_map: *std.process.EnvMap) CfgPath {
-    if (os_tag == .windows) return .{
-        .base_path = env_map.get("APPDATA").?,
-        .sub_path = APP_CFG_DIR,
-    };
-
     if (env_map.get("XDG_CONFIG_HOME")) |xdg| return .{
         .base_path = xdg,
         .sub_path = APP_CFG_DIR,
@@ -85,7 +77,7 @@ fn getConfigDirParts(env_map: *std.process.EnvMap) CfgPath {
 
 pub fn getAndTruncateConfig(arena: *std.heap.ArenaAllocator, env_map: *std.process.EnvMap, diag: ?*Diag) !struct { std.fs.File, Config } {
     const gpa = arena.allocator();
-    var cfg_file = try createOrOpen(env_map);
+    var cfg_file = try createOrOpenConfig(env_map);
     errdefer cfg_file.close();
 
     if (try cfg_file.getEndPos() == 0) return .{ cfg_file, .empty };

@@ -1,5 +1,6 @@
 const std = @import("std");
 const process = std.process;
+const assert = std.debug.assert;
 
 const Diag = @import("main.zig").Diag;
 
@@ -10,6 +11,9 @@ pub fn createSession(
     env_map: *process.EnvMap,
     diag: ?*Diag,
 ) !void {
+    assert(repo_path.len > 0);
+    assert(session_name.len > 0);
+
     const args = &.{
         "tmux",
         "-C",
