@@ -57,20 +57,20 @@ pub fn createSession(
 
     if (session_exists) {
         if (inside_session) {
-            return process.execv(gpa, &.{ "tmux", "switch-client", "-t", session_name });
+            return process.execve(gpa, &.{ "tmux", "switch-client", "-t", session_name }, env_map);
         }
 
-        return process.execv(gpa, &.{ "tmux", "attach-session", "-t", session_name });
+        return process.execve(gpa, &.{ "tmux", "attach-session", "-t", session_name }, env_map);
     }
 
     if (inside_session) {
         var create_proc: process.Child = .init(&.{ "tmux", "new-session", "-d", "-s", session_name }, gpa);
         _ = try create_proc.spawnAndWait();
 
-        return process.execv(gpa, &.{ "tmux", "switch-client", "-t", session_name });
+        return process.execve(gpa, &.{ "tmux", "switch-client", "-t", session_name }, env_map);
     }
 
-    return process.execv(gpa, &.{ "tmux", "new-session", "-s", session_name, "-c", path });
+    return process.execve(gpa, &.{ "tmux", "new-session", "-s", session_name, "-c", path }, env_map);
 }
 
 test "ref all decls" {
