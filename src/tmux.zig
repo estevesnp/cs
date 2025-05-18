@@ -55,9 +55,11 @@ pub fn createSession(
         if (startup_script) |script| {
             try writer.print("{s}\n", .{script});
         }
+
+        try writer.writeAll("switch-client -l\n");
     }
 
-    try writer.writeAll("switch-client -l\n kill-session\n\n");
+    try writer.writeAll("kill-session\n\n");
 
     switch (try control_process.wait()) {
         .Exited => |exit_code| switch (exit_code) {
