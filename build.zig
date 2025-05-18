@@ -1,6 +1,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const build_zig_zon: Z = @import("build.zig.zon");
+
+const Z = struct {
+    version: []const u8,
+    name: enum { cs },
+    fingerprint: u64,
+    minimum_zig_version: []const u8,
+    dependencies: struct {},
+    paths: []const []const u8,
+};
+
 pub fn build(b: *std.Build) void {
     if (builtin.os.tag == .windows) @compileError("tmux is not available on windows");
     const target = b.standardTargetOptions(.{});
@@ -12,6 +23,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    const version = std.SemanticVersion.parse(build_zig_zon.version) catch @panic("invalid build.zig.zon version");
+
+    const options = b.addOptions();
+    options.addOption(std.SemanticVersion, "cs_version", version);
+
+    exe_mod.addOptions("options", options);
 
     const exe = b.addExecutable(.{
         .name = "cs",

@@ -10,6 +10,9 @@ pub const Command = union(enum) {
     /// print help
     help: void,
 
+    /// print version
+    version: void,
+
     /// print config content and path
     config: void,
 
@@ -65,6 +68,13 @@ pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
             }
 
             return .{ .help = {} };
+        } else if (eqlAny(&.{ "-v", "--version" }, arg)) {
+            if (paths != null or repo != null or preview_cmd != null or tmux_script != null or !iter.isEmpty()) {
+                if (diag) |d| d.report("can't pass arguments while using -v/--version flag\n", .{});
+                return Error.IllegalArgument;
+            }
+
+            return .{ .version = {} };
         } else if (mem.eql(u8, arg, "--config")) {
             if (paths != null or repo != null or preview_cmd != null or tmux_script != null or !iter.isEmpty()) {
                 if (diag) |d| d.report("can't pass arguments while using --config flag\n", .{});

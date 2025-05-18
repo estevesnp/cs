@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const options = @import("options");
 const fs = std.fs;
 const json = std.json;
 
@@ -47,6 +48,7 @@ const USAGE =
     \\flags:
     \\
     \\  -h, --help                    print this message
+    \\  -v, --version                 print version
     \\  --config                      print config and config path
     \\  --preview <str>               preview command to pass to fzf
     \\  --script  <str>               script to run on new tmux session
@@ -63,7 +65,6 @@ const USAGE =
 ;
 
 pub fn main() !void {
-    //defer std.debug.print("exiting main...\n", .{});
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 
     const gpa, const is_debug = switch (builtin.mode) {
@@ -91,6 +92,7 @@ fn start(allocator: Allocator, diag: ?*Diag) !void {
 
     switch (cmd) {
         .help => try printHelp(),
+        .version => try printVersion(),
         .config => try printConfig(&arena, diag),
         .set_paths => |p| try setPaths(&arena, p, diag),
         .add_paths => |p| try addPaths(&arena, p, diag),
@@ -100,6 +102,10 @@ fn start(allocator: Allocator, diag: ?*Diag) !void {
 
 fn printHelp() !void {
     try stdout.writeAll(USAGE);
+}
+
+fn printVersion() !void {
+    try stdout.print("{}\n", .{options.cs_version});
 }
 
 fn printConfig(arena: *std.heap.ArenaAllocator, diag: ?*Diag) !void {

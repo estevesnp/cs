@@ -11,15 +11,18 @@ arguments:
 
   repo                          repository to automatically open if found
 
+
 flags:
 
   -h, --help                    print this message
+  -v, --version                 print version
   --config                      print config and config path
   --preview <str>               preview command to pass to fzf
   --script  <str>               script to run on new tmux session
   -p, --paths     <path> [...]  choose paths to search for in this run
   -s, --set-paths <path> [...]  update config setting paths to search for
   -a, --add-paths <path> [...]  update config adding to paths to search for
+
 
 description:
 
