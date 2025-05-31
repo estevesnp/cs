@@ -6,7 +6,7 @@ const assert = std.debug.assert;
 
 const cli = @import("cli.zig");
 const Options = cli.Options;
-const Diag = @import("main.zig").Diag;
+const Diag = @import("Diag.zig");
 
 /// source to search for repos
 pub const Source = struct {

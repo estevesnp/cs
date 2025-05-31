@@ -3,7 +3,7 @@ const root = @import("root");
 const mem = std.mem;
 const assert = std.debug.assert;
 
-const Diag = @import("main.zig").Diag;
+const Diag = @import("Diag.zig");
 
 /// options
 pub const Command = union(enum) {

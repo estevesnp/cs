@@ -3,14 +3,16 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const Source = @import("config.zig").Source;
-const Diag = @import("main.zig").Diag;
+const Diag = @import("Diag.zig");
 
 const Walker = @This();
+
+const repo_markers: []const []const u8 = &.{ ".git", ".jj" };
 
 arena: std.heap.ArenaAllocator,
 sources: []const Source,
 
-git_projects: std.StringArrayHashMapUnmanaged(void) = .empty,
+repositories: std.StringArrayHashMapUnmanaged(void) = .empty,
 path_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 to_check_stack: std.ArrayListUnmanaged([]const u8) = .empty,
 
@@ -46,7 +48,7 @@ pub fn parseRoots(self: *Walker, diag: ?*Diag) ![]const []const u8 {
         try self.recurse(root_dir, source.depth, 0);
     }
 
-    return self.git_projects.keys();
+    return self.repositories.keys();
 }
 
 fn recurse(self: *Walker, dir: std.fs.Dir, max_depth: usize, depth: usize) !void {
@@ -58,9 +60,11 @@ fn recurse(self: *Walker, dir: std.fs.Dir, max_depth: usize, depth: usize) !void
 
     var iter = dir.iterate();
     while (try iter.next()) |next| {
-        if (std.mem.eql(u8, next.name, ".git")) {
-            _ = try self.git_projects.getOrPut(gpa, try std.fs.path.join(gpa, self.path_stack.items));
-            return;
+        for (repo_markers) |marker| {
+            if (std.mem.eql(u8, next.name, marker)) {
+                _ = try self.repositories.getOrPut(gpa, try std.fs.path.join(gpa, self.path_stack.items));
+                return;
+            }
         }
 
         if (next.kind != .directory) continue;

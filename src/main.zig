@@ -12,6 +12,7 @@ const config = @import("config.zig");
 const fzf = @import("fzf.zig");
 const tmux = @import("tmux.zig");
 
+const Diag = @import("Diag.zig");
 const Walker = @import("Walker.zig");
 const Config = config.Config;
 const Source = config.Source;
@@ -20,22 +21,6 @@ const SourceSet = std.ArrayHashMapUnmanaged(Source, void, Source.Context, true);
 
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
-
-pub const Diag = struct {
-    stream: std.io.AnyWriter,
-
-    pub const stderr_stream: Diag = .{ .stream = stderr.any() };
-
-    pub fn init(stream: std.io.AnyWriter) Diag {
-        return .{ .stream = stream };
-    }
-
-    pub fn report(self: *Diag, comptime fmt: []const u8, args: anytype) void {
-        self.stream.print(fmt, args) catch |err| {
-            std.debug.print("couldn't write to stream: {s}\n", .{@errorName(err)});
-        };
-    }
-};
 
 const USAGE =
     \\usage: cs [repo] [flags]
@@ -75,7 +60,7 @@ pub fn main() !void {
         _ = debug_allocator.deinit();
     };
 
-    var diag: Diag = .stderr_stream;
+    var diag: Diag = .init(stderr.any());
 
     try start(gpa, &diag);
 }

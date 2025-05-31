@@ -2,7 +2,7 @@ const std = @import("std");
 const process = std.process;
 const assert = std.debug.assert;
 
-const Diag = @import("main.zig").Diag;
+const Diag = @import("Diag.zig");
 
 pub fn createSession(
     gpa: std.mem.Allocator,

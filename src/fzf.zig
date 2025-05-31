@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 
-const Diag = @import("main.zig").Diag;
+const Diag = @import("Diag.zig");
 
 pub const NO_MATCH_EXIT_CODE: u8 = 1;
 pub const INTERRUPT_EXIT_CODE: u8 = 130;
