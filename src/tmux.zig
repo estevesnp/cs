@@ -7,13 +7,14 @@ const Diag = @import("Diag.zig");
 pub fn createSession(
     gpa: std.mem.Allocator,
     repo_path: []const u8,
-    session_name: []const u8,
     startup_script: ?[]const u8,
     env_map: *process.EnvMap,
     diag: ?*Diag,
 ) !void {
     assert(repo_path.len > 0);
-    assert(session_name.len > 0);
+
+    const session_name = try normalizeBasename(gpa, std.fs.path.basename(repo_path));
+    defer gpa.free(session_name);
 
     const args = &.{
         "tmux",
@@ -84,6 +85,35 @@ pub fn createSession(
     return process.execve(gpa, &.{ "tmux", "attach-session", "-t", session_name }, env_map);
 }
 
+/// trims a basename for '.' and replaces inner '.' with '_'
+/// caller owns the memory
+/// example: '..foo.bar..' becomes 'foo_bar'
+fn normalizeBasename(gpa: std.mem.Allocator, basename: []const u8) ![]u8 {
+    const trimmed = std.mem.trim(u8, basename, ".");
+    const buf = try gpa.alloc(u8, trimmed.len);
+
+    for (trimmed, 0..) |char, idx| {
+        buf[idx] = if (char == '.') '_' else char;
+    }
+
+    return buf;
+}
+
 test "ref all decls" {
     std.testing.refAllDeclsRecursive(@This());
+}
+
+test normalizeBasename {
+    try testNormalizeBasename("..foo.bar..", "foo_bar");
+    try testNormalizeBasename("foo.bar..", "foo_bar");
+    try testNormalizeBasename("..foo.bar", "foo_bar");
+    try testNormalizeBasename("..foobar..", "foobar");
+    try testNormalizeBasename("foobar", "foobar");
+}
+
+fn testNormalizeBasename(input: []const u8, expected: []const u8) !void {
+    const res = try normalizeBasename(std.testing.allocator, input);
+    defer std.testing.allocator.free(res);
+
+    try std.testing.expectEqualStrings(expected, res);
 }

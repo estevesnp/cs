@@ -101,8 +101,8 @@ test "parseRoots" {
     const root_2_path = try root_2.dir.realpathAlloc(gpa, ".");
     defer gpa.free(root_2_path);
 
-    try t_setupDirs(root_1.dir);
-    try t_setupDirs(root_2.dir);
+    try testSetupDirs(root_1.dir);
+    try testSetupDirs(root_2.dir);
 
     var walker: Walker = .init(gpa, &.{ .{ .root = root_1_path }, .{ .root = root_2_path } });
     defer walker.deinit();
@@ -113,9 +113,9 @@ test "parseRoots" {
 
     const expected_paths: []const []const u8 = &.{
         "git-1",
-        &t_join(&.{ "git-2", "nested" }),
-        &t_join(&.{ "git-3", "nested", "nesteder" }),
-        &t_join(&.{ "git-double", "nested" }),
+        &testJoin(&.{ "git-2", "nested" }),
+        &testJoin(&.{ "git-3", "nested", "nesteder" }),
+        &testJoin(&.{ "git-double", "nested" }),
     };
 
     for (@as([]const []const u8, &.{ root_1_path, root_2_path })) |path| {
@@ -131,12 +131,12 @@ test "parseRoots" {
     }
 }
 
-fn t_join(comptime path_parts: []const []const u8) [t_getLen(path_parts)]u8 {
+fn testJoin(comptime path_parts: []const []const u8) [testGetLen(path_parts)]u8 {
     if (path_parts.len < 2) {
         @compileError("join needs more than one path part");
     }
 
-    var res: [t_getLen(path_parts)]u8 = undefined;
+    var res: [testGetLen(path_parts)]u8 = undefined;
     var slice: []u8 = &res;
 
     var idx: usize = 0;
@@ -154,7 +154,7 @@ fn t_join(comptime path_parts: []const []const u8) [t_getLen(path_parts)]u8 {
     return res;
 }
 
-fn t_getLen(pp: []const []const u8) usize {
+fn testGetLen(pp: []const []const u8) usize {
     var count: usize = pp.len - 1;
     for (pp) |p| {
         count += p.len;
@@ -162,7 +162,7 @@ fn t_getLen(pp: []const []const u8) usize {
     return count;
 }
 
-fn t_setupDirs(dir: std.fs.Dir) !void {
+fn testSetupDirs(dir: std.fs.Dir) !void {
     {
         try dir.makeDir("git-1");
         var git = try dir.openDir("git-1", .{});

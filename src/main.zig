@@ -265,7 +265,6 @@ fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts, diag: ?*Diag) !void {
     try tmux.createSession(
         gpa,
         repo_path,
-        fs.path.basename(repo_path),
         opts.tmux_script orelse cfg.tmux_script,
         &env_map,
         diag,
