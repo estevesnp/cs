@@ -13,8 +13,8 @@ pub fn createSession(
 ) !void {
     assert(repo_path.len > 0);
 
-    const session_name = try normalizeBasename(gpa, std.fs.path.basename(repo_path));
-    defer gpa.free(session_name);
+    var session_buf: [256]u8 = undefined;
+    const session_name = normalizeBasename(std.fs.path.basename(repo_path), &session_buf);
 
     const args = &.{
         "tmux",
@@ -86,17 +86,20 @@ pub fn createSession(
 }
 
 /// trims a basename for '.' and replaces inner '.' with '_'
-/// caller owns the memory
 /// example: '..foo.bar..' becomes 'foo_bar'
-fn normalizeBasename(gpa: std.mem.Allocator, basename: []const u8) ![]u8 {
+fn normalizeBasename(basename: []const u8, buf: []u8) []u8 {
+    assert(buf.len >= basename.len);
+
     const trimmed = std.mem.trim(u8, basename, ".");
-    const buf = try gpa.alloc(u8, trimmed.len);
+    const normalized = buf[0..trimmed.len];
+
+    @memcpy(normalized, trimmed);
 
     for (trimmed, 0..) |char, idx| {
         buf[idx] = if (char == '.') '_' else char;
     }
 
-    return buf;
+    return normalized;
 }
 
 test "ref all decls" {
@@ -112,8 +115,6 @@ test normalizeBasename {
 }
 
 fn testNormalizeBasename(input: []const u8, expected: []const u8) !void {
-    const res = try normalizeBasename(std.testing.allocator, input);
-    defer std.testing.allocator.free(res);
-
-    try std.testing.expectEqualStrings(expected, res);
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(expected, normalizeBasename(input, &buf));
 }

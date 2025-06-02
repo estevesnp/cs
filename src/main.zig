@@ -180,7 +180,10 @@ fn setPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8, diag: ?*
 
     try saveConfig(cfg, cfg_file);
 
-    try stdout.writeAll("paths successfully set\n");
+    try stdout.writeAll("paths successfully set:\n");
+    for (cfg.sources) |src| {
+        try stdout.print("  - {s}\n", .{src.root});
+    }
 }
 
 fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8, diag: ?*Diag) !void {
@@ -201,13 +204,23 @@ fn addPaths(arena: *std.heap.ArenaAllocator, paths: []const []const u8, diag: ?*
         _ = try source_set.getOrPut(gpa, source);
     }
 
+    const old_sources_len = cfg.sources.len;
+
     try populateSources(gpa, &source_set, paths);
 
     cfg.sources = source_set.keys();
 
+    if (old_sources_len == cfg.sources.len) {
+        try stdout.writeAll("no new paths added\n");
+        return;
+    }
+
     try saveConfig(cfg, cfg_file);
 
-    try stdout.writeAll("paths successfully added\n");
+    try stdout.writeAll("paths successfully added:\n");
+    for (cfg.sources[old_sources_len..]) |src| {
+        try stdout.print("  - {s}\n", .{src.root});
+    }
 }
 
 fn run(arena: *std.heap.ArenaAllocator, opts: cli.RunOpts, diag: ?*Diag) !void {
