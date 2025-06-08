@@ -17,6 +17,7 @@ flags:
   -h, --help                    print this message
   -v, --version                 print version
   --config                      print config and config path
+  --no-preview                  disables fzf preview
   --preview <str>               preview command to pass to fzf
   --script  <str>               script to run on new tmux session
   -p, --paths     <path> [...]  choose paths to search for in this run

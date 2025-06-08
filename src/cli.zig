@@ -58,6 +58,8 @@ pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
     var preview_cmd: ?[]const u8 = null;
     var tmux_script: ?[]const u8 = null;
 
+    var no_preview = false;
+
     var iter: Iterator([]const u8) = .init(args[1..]);
 
     while (iter.next()) |arg| {
@@ -163,6 +165,18 @@ pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
             }
 
             tmux_script = script;
+        } else if (std.mem.eql(u8, arg, "--no-preview")) {
+            if (no_preview) {
+                if (diag) |d| d.report("can't use --no-preview more than once\n", .{});
+                return Error.RepeatedArgument;
+            }
+            if (preview_cmd != null) {
+                if (diag) |d| d.report("can't use --no-preview and --preview flag at the same time\n", .{});
+                return Error.IllegalArgument;
+            }
+
+            no_preview = true;
+            preview_cmd = "";
         } else {
             if (isFlagArgument(arg)) {
                 if (diag) |d| d.report("unkown flag: {s}\n", .{arg});
