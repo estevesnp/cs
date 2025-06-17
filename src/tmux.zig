@@ -77,12 +77,9 @@ pub fn createSession(
     }
 
     const inside_session = env_map.get("TMUX") != null;
+    const session_command = if (inside_session) "switch-client" else "attach-session";
 
-    if (inside_session) {
-        return process.execve(gpa, &.{ "tmux", "switch-client", "-t", session_name }, env_map);
-    }
-
-    return process.execve(gpa, &.{ "tmux", "attach-session", "-t", session_name }, env_map);
+    return process.execve(gpa, &.{ "tmux", session_command, "-t", session_name }, env_map);
 }
 
 /// trims a basename for '.' and replaces inner '.' with '_'
@@ -93,10 +90,8 @@ fn normalizeBasename(basename: []const u8, buf: []u8) []u8 {
     const trimmed = std.mem.trim(u8, basename, ".");
     const normalized = buf[0..trimmed.len];
 
-    @memcpy(normalized, trimmed);
-
     for (trimmed, 0..) |char, idx| {
-        buf[idx] = if (char == '.') '_' else char;
+        normalized[idx] = if (char == '.') '_' else char;
     }
 
     return normalized;
