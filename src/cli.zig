@@ -69,21 +69,21 @@ pub fn parseArgs(args: []const []const u8, diag: ?*Diag) Error!Command {
                 return Error.IllegalArgument;
             }
 
-            return .{ .help = {} };
+            return .help;
         } else if (eqlAny(&.{ "-v", "--version" }, arg)) {
             if (paths != null or repo != null or preview_cmd != null or tmux_script != null or !iter.isEmpty()) {
                 if (diag) |d| d.report("can't pass arguments while using -v/--version flag\n", .{});
                 return Error.IllegalArgument;
             }
 
-            return .{ .version = {} };
+            return .version;
         } else if (mem.eql(u8, arg, "--config")) {
             if (paths != null or repo != null or preview_cmd != null or tmux_script != null or !iter.isEmpty()) {
                 if (diag) |d| d.report("can't pass arguments while using --config flag\n", .{});
                 return Error.IllegalArgument;
             }
 
-            return .{ .config = {} };
+            return .config;
         } else if (eqlAny(&.{ "-s", "--set-paths" }, arg)) {
             if (paths != null or repo != null or preview_cmd != null or tmux_script != null) {
                 if (diag) |d| d.report("can't pass other arguments while using -s/--set-paths flag\n", .{});
@@ -322,15 +322,15 @@ fn testParsePaths(args: []const []const u8, expected: []const []const u8) !void 
 }
 
 test "parseArgs help" {
-    try std.testing.expectEqual(Command{ .help = {} }, try parseArgs(&.{ "cs", "-h" }, null));
-    try std.testing.expectEqual(Command{ .help = {} }, try parseArgs(&.{ "cs", "--help" }, null));
+    try std.testing.expectEqual(.help, try parseArgs(&.{ "cs", "-h" }, null));
+    try std.testing.expectEqual(.help, try parseArgs(&.{ "cs", "--help" }, null));
 
     try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "--help", "a" }, null));
     try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "a", "--help" }, null));
 }
 
 test "parseArgs config" {
-    try std.testing.expectEqual(Command{ .config = {} }, try parseArgs(&.{ "cs", "--config" }, null));
+    try std.testing.expectEqual(.config, try parseArgs(&.{ "cs", "--config" }, null));
 
     try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "--config", "a" }, null));
     try std.testing.expectError(Error.IllegalArgument, parseArgs(&.{ "cs", "a", "--config" }, null));
