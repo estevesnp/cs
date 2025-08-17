@@ -9,6 +9,7 @@ const Diag = @import("Diag.zig");
 const Tag = Diag.Tag;
 
 const default_fzf_preview = switch (builtin.os.tag) {
+    // works in cmd and powershell
     .windows => "type {}",
     else => "cat {}",
 };
@@ -22,11 +23,12 @@ pub const Command = union(enum) {
     // TODO: do we want config location only? do we print the config as well?
     env,
     // TODO: do we want set_path and remove_path?
-    add_paths: []const []const u8,
-    run: RunOpts,
+    @"add-paths": []const []const u8,
+    /// search for projects
+    search: SearchOpts,
 };
 
-pub const RunAction = enum {
+pub const SearchAction = enum {
     /// open new tmux session with project. default option
     session,
     /// open new tmux window with project
@@ -37,15 +39,15 @@ pub const RunAction = enum {
     print,
 };
 
-pub const RunOpts = struct {
+pub const SearchOpts = struct {
     /// default project search
     project: []const u8 = "",
     /// fzf preview command. --no-preview sets this as an empty string
-    fzf_preview: []const u8 = default_fzf_preview,
+    preview: []const u8 = default_fzf_preview,
     /// tmux script to run after a new session
-    tmux_session_script: []const u8 = "",
+    script: []const u8 = "",
     /// action to take on project found
-    action: RunAction = .session,
+    action: SearchAction = .session,
 };
 
 pub const ArgParseError = error{ IllegalArgument, MissingArgument };
@@ -56,7 +58,7 @@ pub fn parse(diag: *Diag, args: []const []const u8) ArgParseError!Command {
     var iter: ArgIterator = .init(args);
     assert(iter.next() != null);
 
-    var run_opts: RunOpts = .{};
+    var search_opts: SearchOpts = .{};
 
     while (iter.next()) |arg| {
         if (eqlAny(&.{ "--help", "-h" }, arg)) {
@@ -73,32 +75,32 @@ pub fn parse(diag: *Diag, args: []const []const u8) ArgParseError!Command {
         }
         if (eqlAny(&.{ "--add-paths", "-a" }, arg)) {
             try validateFirstArg(&iter, .@"add-paths", diag);
-            return .{ .add_paths = try getPaths(&iter, diag) };
+            return .{ .@"add-paths" = try getPaths(&iter, diag) };
         }
-        // run opts
+        // search opts
         if (mem.eql(u8, "--preview", arg)) {
-            run_opts.fzf_preview = try getNextValidArg(&iter, .preview, diag);
+            search_opts.preview = try getNextValidArg(&iter, .preview, diag);
         } else if (mem.eql(u8, "--no-preview", arg)) {
-            run_opts.fzf_preview = "";
+            search_opts.preview = "";
         } else if (mem.eql(u8, "--script", arg)) {
-            run_opts.tmux_session_script = try getNextValidArg(&iter, .script, diag);
+            search_opts.script = try getNextValidArg(&iter, .script, diag);
         } else if (mem.eql(u8, "--action", arg)) {
             const action = try getNextValidArg(&iter, .action, diag);
-            run_opts.action = std.meta.stringToEnum(RunAction, action) orelse {
+            search_opts.action = std.meta.stringToEnum(SearchAction, action) orelse {
                 diag.report(.action, "illegal action: {s}", .{action});
                 return error.IllegalArgument;
             };
         } else if (mem.startsWith(u8, arg, "--")) {
-            run_opts.action = std.meta.stringToEnum(RunAction, arg[2..]) orelse {
+            search_opts.action = std.meta.stringToEnum(SearchAction, arg[2..]) orelse {
                 diag.reportUntagged("illegal flag: {s}", .{arg});
                 return error.IllegalArgument;
             };
         } else {
-            run_opts.project = arg;
+            search_opts.project = arg;
         }
     }
 
-    return .{ .run = run_opts };
+    return .{ .search = search_opts };
 }
 
 fn isFlag(arg: []const u8) bool {
@@ -339,7 +341,7 @@ fn testPaths(args: []const []const u8, expected_paths: []const []const u8) !void
     var diag: Diag = .init(&writer.writer);
 
     const result = try parse(&diag, args);
-    const paths = result.add_paths;
+    const paths = result.@"add-paths";
 
     try std.testing.expectEqual(expected_paths.len, paths.len);
     for (expected_paths, paths) |expected_path, path| {
@@ -406,177 +408,177 @@ test "correctly fails bad flag" {
     );
 }
 
-fn testRunCommand(args: []const []const u8, expected_run_opts: RunOpts) !void {
+fn testSearchCommand(args: []const []const u8, expected_search_opts: SearchOpts) !void {
     var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
     var diag: Diag = .init(&writer.writer);
 
     const result = try parse(&diag, args);
-    const run_opts = result.run;
+    const search_opts = result.search;
 
-    try std.testing.expectEqualStrings(expected_run_opts.project, run_opts.project);
-    try std.testing.expectEqualStrings(expected_run_opts.fzf_preview, run_opts.fzf_preview);
-    try std.testing.expectEqualStrings(expected_run_opts.tmux_session_script, run_opts.tmux_session_script);
-    try std.testing.expectEqual(expected_run_opts.action, run_opts.action);
+    try std.testing.expectEqualStrings(expected_search_opts.project, search_opts.project);
+    try std.testing.expectEqualStrings(expected_search_opts.preview, search_opts.preview);
+    try std.testing.expectEqualStrings(expected_search_opts.script, search_opts.script);
+    try std.testing.expectEqual(expected_search_opts.action, search_opts.action);
 
     try std.testing.expectEqual(0, writer.written().len);
 }
 
-test "parse run command correctly" {
+test "parse search command correctly" {
     { // project
-        try testRunCommand(&.{"cs"}, .{
+        try testSearchCommand(&.{"cs"}, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "my-project" }, .{
+        try testSearchCommand(&.{ "cs", "my-project" }, .{
             .project = "my-project",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "my-project", "other-project" }, .{
+        try testSearchCommand(&.{ "cs", "my-project", "other-project" }, .{
             .project = "other-project",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "my-project", "" }, .{
+        try testSearchCommand(&.{ "cs", "my-project", "" }, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .session,
         });
     }
     { // preview
-        try testRunCommand(&.{ "cs", "--preview", "bat {}" }, .{
+        try testSearchCommand(&.{ "cs", "--preview", "bat {}" }, .{
             .project = "",
-            .fzf_preview = "bat {}",
-            .tmux_session_script = "",
+            .preview = "bat {}",
+            .script = "",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "--preview", "" }, .{
+        try testSearchCommand(&.{ "cs", "--preview", "" }, .{
             .project = "",
-            .fzf_preview = "",
-            .tmux_session_script = "",
+            .preview = "",
+            .script = "",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "--preview", "bat {}", "--no-preview" }, .{
+        try testSearchCommand(&.{ "cs", "--preview", "bat {}", "--no-preview" }, .{
             .project = "",
-            .fzf_preview = "",
-            .tmux_session_script = "",
+            .preview = "",
+            .script = "",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "proj", "--preview", "bat {}" }, .{
+        try testSearchCommand(&.{ "cs", "proj", "--preview", "bat {}" }, .{
             .project = "proj",
-            .fzf_preview = "bat {}",
-            .tmux_session_script = "",
+            .preview = "bat {}",
+            .script = "",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "--preview", "bat {}", "proj" }, .{
+        try testSearchCommand(&.{ "cs", "--preview", "bat {}", "proj" }, .{
             .project = "proj",
-            .fzf_preview = "bat {}",
-            .tmux_session_script = "",
+            .preview = "bat {}",
+            .script = "",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "one", "--preview", "bat {}", "two" }, .{
+        try testSearchCommand(&.{ "cs", "one", "--preview", "bat {}", "two" }, .{
             .project = "two",
-            .fzf_preview = "bat {}",
-            .tmux_session_script = "",
+            .preview = "bat {}",
+            .script = "",
             .action = .session,
         });
     }
     { // script
-        try testRunCommand(&.{ "cs", "--script", "echo hi" }, .{
+        try testSearchCommand(&.{ "cs", "--script", "echo hi" }, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "echo hi",
+            .preview = default_fzf_preview,
+            .script = "echo hi",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "--script", "" }, .{
+        try testSearchCommand(&.{ "cs", "--script", "" }, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .session,
         });
 
-        try testRunCommand(&.{ "cs", "--script", "echo hi", "--script", "echo bye" }, .{
+        try testSearchCommand(&.{ "cs", "--script", "echo hi", "--script", "echo bye" }, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "echo bye",
+            .preview = default_fzf_preview,
+            .script = "echo bye",
             .action = .session,
         });
-        try testRunCommand(&.{ "cs", "proj", "--script", "echo hi" }, .{
+        try testSearchCommand(&.{ "cs", "proj", "--script", "echo hi" }, .{
             .project = "proj",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "echo hi",
+            .preview = default_fzf_preview,
+            .script = "echo hi",
             .action = .session,
         });
 
-        try testRunCommand(&.{ "cs", "--script", "echo hi", "proj" }, .{
+        try testSearchCommand(&.{ "cs", "--script", "echo hi", "proj" }, .{
             .project = "proj",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "echo hi",
+            .preview = default_fzf_preview,
+            .script = "echo hi",
             .action = .session,
         });
     }
     { // action
-        try testRunCommand(&.{ "cs", "--action", "cd" }, .{
+        try testSearchCommand(&.{ "cs", "--action", "cd" }, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .cd,
         });
-        try testRunCommand(&.{ "cs", "--cd" }, .{
+        try testSearchCommand(&.{ "cs", "--cd" }, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .cd,
         });
-        try testRunCommand(&.{ "cs", "--action", "print" }, .{
+        try testSearchCommand(&.{ "cs", "--action", "print" }, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .print,
         });
-        try testRunCommand(&.{ "cs", "--print" }, .{
+        try testSearchCommand(&.{ "cs", "--print" }, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .print,
         });
-        try testRunCommand(&.{ "cs", "--action", "cd", "--window" }, .{
+        try testSearchCommand(&.{ "cs", "--action", "cd", "--window" }, .{
             .project = "",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .window,
         });
-        try testRunCommand(&.{ "cs", "--cd", "proj", "--session" }, .{
+        try testSearchCommand(&.{ "cs", "--cd", "proj", "--session" }, .{
             .project = "proj",
-            .fzf_preview = default_fzf_preview,
-            .tmux_session_script = "",
+            .preview = default_fzf_preview,
+            .script = "",
             .action = .session,
         });
     }
     { // mix
-        try testRunCommand(&.{ "cs", "proj", "--preview", "bat {}", "--script", "echo hi", "--action", "cd" }, .{
+        try testSearchCommand(&.{ "cs", "proj", "--preview", "bat {}", "--script", "echo hi", "--action", "cd" }, .{
             .project = "proj",
-            .fzf_preview = "bat {}",
-            .tmux_session_script = "echo hi",
+            .preview = "bat {}",
+            .script = "echo hi",
             .action = .cd,
         });
-        try testRunCommand(&.{ "cs", "--session", "--preview", "bat {}", "proj" }, .{
+        try testSearchCommand(&.{ "cs", "--session", "--preview", "bat {}", "proj" }, .{
             .project = "proj",
-            .fzf_preview = "bat {}",
-            .tmux_session_script = "",
+            .preview = "bat {}",
+            .script = "",
             .action = .session,
         });
     }
 }
 
-test "correctly fails bad run command" {
+test "correctly fails bad search command" {
     { // preview
         try testFailure(
             &.{ "cs", "--preview" },
@@ -603,7 +605,7 @@ test "correctly fails bad run command" {
         );
     }
 
-    { // script
+    { // action
         try testFailure(
             &.{ "cs", "--action" },
             "error parsing action flag: expected argument, none found\n",

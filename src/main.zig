@@ -31,7 +31,7 @@ pub fn main() !void {
 
 fn printParsed(parsed: cli.Command) void {
     switch (parsed) {
-        .add_paths => |paths| {
+        .@"add-paths" => |paths| {
             std.debug.print("add paths: ", .{});
             for (paths) |path| {
                 std.debug.print("{s} ", .{path});
@@ -41,11 +41,11 @@ fn printParsed(parsed: cli.Command) void {
         .help => std.debug.print("help\n", .{}),
         .version => std.debug.print("version\n", .{}),
         .env => std.debug.print("env\n", .{}),
-        .run => |r| {
-            std.debug.print("run:\n", .{});
+        .search => |r| {
+            std.debug.print("start:\n", .{});
             std.debug.print("  project: {s}\n", .{r.project});
-            std.debug.print("  preview: {s}\n", .{r.fzf_preview});
-            std.debug.print("  script: {s}\n", .{r.tmux_session_script});
+            std.debug.print("  preview: {s}\n", .{r.preview});
+            std.debug.print("  script: {s}\n", .{r.script});
             std.debug.print("  action: {s}\n", .{@tagName(r.action)});
         },
     }

@@ -3,7 +3,37 @@ const std = @import("std");
 const Writer = std.Io.Writer;
 const Diag = @This();
 
-pub const Tag = @TypeOf(.enum_literal);
+const cli = @import("cli.zig");
+
+/// enum derived from the `cli.Command` fields
+/// used for tagging diagnostic messages
+pub const Tag = blk: {
+    const cmd_fields = @typeInfo(cli.Command).@"union".fields;
+    const search_fields = @typeInfo(cli.SearchOpts).@"struct".fields;
+
+    const num_fields = cmd_fields.len + search_fields.len;
+    var fields: [num_fields]std.builtin.Type.EnumField = undefined;
+
+    var idx = 0;
+    for (cmd_fields) |field| {
+        fields[idx] = .{ .name = field.name, .value = idx };
+        idx += 1;
+    }
+
+    for (search_fields) |field| {
+        fields[idx] = .{ .name = field.name, .value = idx };
+        idx += 1;
+    }
+
+    const enum_info = std.builtin.Type.Enum{
+        .tag_type = u8,
+        .fields = &fields,
+        .decls = &.{},
+        .is_exhaustive = true,
+    };
+
+    break :blk @Type(std.builtin.Type{ .@"enum" = enum_info });
+};
 
 var noop_writer: Writer = .{
     .buffer = &.{},
