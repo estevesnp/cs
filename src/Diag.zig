@@ -3,6 +3,8 @@ const std = @import("std");
 const Writer = std.Io.Writer;
 const Diag = @This();
 
+const log = std.log.scoped(.Diag);
+
 const cli = @import("cli.zig");
 
 /// enum derived from the `cli.Command` fields
@@ -16,6 +18,9 @@ pub const Tag = blk: {
 
     var idx = 0;
     for (cmd_fields) |field| {
+        // 'search' isn't a flag
+        if (@FieldType(cli.Command, field.name) == cli.SearchOpts) continue;
+
         fields[idx] = .{ .name = field.name, .value = idx };
         idx += 1;
     }
@@ -27,7 +32,7 @@ pub const Tag = blk: {
 
     const enum_info = std.builtin.Type.Enum{
         .tag_type = u8,
-        .fields = &fields,
+        .fields = fields[0..idx],
         .decls = &.{},
         .is_exhaustive = true,
     };
@@ -66,10 +71,12 @@ pub fn reportUntagged(
     comptime fmt: []const u8,
     args: anytype,
 ) void {
-    self.writer.print(fmt ++ "\n", args) catch |err|
-        std.debug.print("error printing to writer: {s}\n", .{@errorName(err)});
+    self.writer.print(fmt ++ "\n", args) catch |err| {
+        log.err("error printing to writer: {s}", .{@errorName(err)});
+        return;
+    };
     self.writer.flush() catch |err|
-        std.debug.print("error flushing writer: {s}\n", .{@errorName(err)});
+        log.err("error flushing writer: {s}", .{@errorName(err)});
 }
 
 pub fn report(
@@ -78,8 +85,10 @@ pub fn report(
     comptime fmt: []const u8,
     args: anytype,
 ) void {
-    self.writer.print("error parsing {s} flag: ", .{@tagName(tag)}) catch |err|
-        std.debug.print("error printing to writer: {s}\n", .{@errorName(err)});
+    self.writer.print("error parsing {s} flag: ", .{@tagName(tag)}) catch |err| {
+        log.err("error printing to writer: {s}", .{@errorName(err)});
+        return;
+    };
     self.reportUntagged(fmt, args);
 }
 

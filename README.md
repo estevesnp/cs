@@ -4,6 +4,8 @@ easily change and manage projects in tmux sessions
 
 ## TODO
 
-- [ ] create Tag enum in comptime for actual possible commands
-- [ ] actually implement stuff
-- [ ] shell completions?
+- add-paths tests
+- main tests
+- Diag.Tag tests
+- move Context to it's own file?
+- shell completions?

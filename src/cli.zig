@@ -43,11 +43,11 @@ pub const SearchOpts = struct {
     /// default project search
     project: []const u8 = "",
     /// fzf preview command. --no-preview sets this as an empty string
-    preview: []const u8 = default_fzf_preview,
+    preview: ?[]const u8 = null,
     /// tmux script to run after a new session
-    script: []const u8 = "",
+    script: ?[]const u8 = null,
     /// action to take on project found
-    action: SearchAction = .session,
+    action: ?SearchAction = null,
 };
 
 pub const ArgParseError = error{ IllegalArgument, MissingArgument };
@@ -417,10 +417,20 @@ fn testSearchCommand(args: []const []const u8, expected_search_opts: SearchOpts)
     const result = try parse(&diag, args);
     const search_opts = result.search;
 
-    try std.testing.expectEqualStrings(expected_search_opts.project, search_opts.project);
-    try std.testing.expectEqualStrings(expected_search_opts.preview, search_opts.preview);
-    try std.testing.expectEqualStrings(expected_search_opts.script, search_opts.script);
+    if (expected_search_opts.preview) |preview| {
+        try std.testing.expectEqualStrings(preview, search_opts.preview.?);
+    } else {
+        try std.testing.expectEqual(null, search_opts.preview);
+    }
+
+    if (expected_search_opts.script) |script| {
+        try std.testing.expectEqualStrings(script, search_opts.script.?);
+    } else {
+        try std.testing.expectEqual(null, search_opts.script);
+    }
+
     try std.testing.expectEqual(expected_search_opts.action, search_opts.action);
+    try std.testing.expectEqualStrings(expected_search_opts.project, search_opts.project);
 
     try std.testing.expectEqual(0, writer.written().len);
 }
@@ -429,136 +439,136 @@ test "parse search command correctly" {
     { // project
         try testSearchCommand(&.{"cs"}, .{
             .project = "",
-            .preview = default_fzf_preview,
-            .script = "",
-            .action = .session,
+            .preview = null,
+            .script = null,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "my-project" }, .{
             .project = "my-project",
-            .preview = default_fzf_preview,
-            .script = "",
-            .action = .session,
+            .preview = null,
+            .script = null,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "my-project", "other-project" }, .{
             .project = "other-project",
-            .preview = default_fzf_preview,
-            .script = "",
-            .action = .session,
+            .preview = null,
+            .script = null,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "my-project", "" }, .{
             .project = "",
-            .preview = default_fzf_preview,
-            .script = "",
-            .action = .session,
+            .preview = null,
+            .script = null,
+            .action = null,
         });
     }
     { // preview
         try testSearchCommand(&.{ "cs", "--preview", "bat {}" }, .{
             .project = "",
             .preview = "bat {}",
-            .script = "",
-            .action = .session,
+            .script = null,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "--preview", "" }, .{
             .project = "",
             .preview = "",
-            .script = "",
-            .action = .session,
+            .script = null,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "--preview", "bat {}", "--no-preview" }, .{
             .project = "",
             .preview = "",
-            .script = "",
-            .action = .session,
+            .script = null,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "proj", "--preview", "bat {}" }, .{
             .project = "proj",
             .preview = "bat {}",
-            .script = "",
-            .action = .session,
+            .script = null,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "--preview", "bat {}", "proj" }, .{
             .project = "proj",
             .preview = "bat {}",
-            .script = "",
-            .action = .session,
+            .script = null,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "one", "--preview", "bat {}", "two" }, .{
             .project = "two",
             .preview = "bat {}",
-            .script = "",
-            .action = .session,
+            .script = null,
+            .action = null,
         });
     }
     { // script
         try testSearchCommand(&.{ "cs", "--script", "echo hi" }, .{
             .project = "",
-            .preview = default_fzf_preview,
+            .preview = null,
             .script = "echo hi",
-            .action = .session,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "--script", "" }, .{
             .project = "",
-            .preview = default_fzf_preview,
+            .preview = null,
             .script = "",
-            .action = .session,
+            .action = null,
         });
 
         try testSearchCommand(&.{ "cs", "--script", "echo hi", "--script", "echo bye" }, .{
             .project = "",
-            .preview = default_fzf_preview,
+            .preview = null,
             .script = "echo bye",
-            .action = .session,
+            .action = null,
         });
         try testSearchCommand(&.{ "cs", "proj", "--script", "echo hi" }, .{
             .project = "proj",
-            .preview = default_fzf_preview,
+            .preview = null,
             .script = "echo hi",
-            .action = .session,
+            .action = null,
         });
 
         try testSearchCommand(&.{ "cs", "--script", "echo hi", "proj" }, .{
             .project = "proj",
-            .preview = default_fzf_preview,
+            .preview = null,
             .script = "echo hi",
-            .action = .session,
+            .action = null,
         });
     }
     { // action
         try testSearchCommand(&.{ "cs", "--action", "cd" }, .{
             .project = "",
-            .preview = default_fzf_preview,
-            .script = "",
+            .preview = null,
+            .script = null,
             .action = .cd,
         });
         try testSearchCommand(&.{ "cs", "--cd" }, .{
             .project = "",
-            .preview = default_fzf_preview,
-            .script = "",
+            .preview = null,
+            .script = null,
             .action = .cd,
         });
         try testSearchCommand(&.{ "cs", "--action", "print" }, .{
             .project = "",
-            .preview = default_fzf_preview,
-            .script = "",
+            .preview = null,
+            .script = null,
             .action = .print,
         });
         try testSearchCommand(&.{ "cs", "--print" }, .{
             .project = "",
-            .preview = default_fzf_preview,
-            .script = "",
+            .preview = null,
+            .script = null,
             .action = .print,
         });
         try testSearchCommand(&.{ "cs", "--action", "cd", "--window" }, .{
             .project = "",
-            .preview = default_fzf_preview,
-            .script = "",
+            .preview = null,
+            .script = null,
             .action = .window,
         });
         try testSearchCommand(&.{ "cs", "--cd", "proj", "--session" }, .{
             .project = "proj",
-            .preview = default_fzf_preview,
-            .script = "",
+            .preview = null,
+            .script = null,
             .action = .session,
         });
     }
@@ -572,7 +582,7 @@ test "parse search command correctly" {
         try testSearchCommand(&.{ "cs", "--session", "--preview", "bat {}", "proj" }, .{
             .project = "proj",
             .preview = "bat {}",
-            .script = "",
+            .script = null,
             .action = .session,
         });
     }
