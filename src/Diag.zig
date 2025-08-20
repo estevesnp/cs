@@ -72,11 +72,11 @@ pub fn reportUntagged(
     args: anytype,
 ) void {
     self.writer.print(fmt ++ "\n", args) catch |err| {
-        log.err("error printing to writer: {s}", .{@errorName(err)});
+        log.err("error printing to writer: {t}", .{err});
         return;
     };
     self.writer.flush() catch |err|
-        log.err("error flushing writer: {s}", .{@errorName(err)});
+        log.err("error flushing writer: {t}", .{err});
 }
 
 pub fn report(
@@ -85,8 +85,8 @@ pub fn report(
     comptime fmt: []const u8,
     args: anytype,
 ) void {
-    self.writer.print("error parsing {s} flag: ", .{@tagName(tag)}) catch |err| {
-        log.err("error printing to writer: {s}", .{@errorName(err)});
+    self.writer.print("error parsing {t} flag: ", .{tag}) catch |err| {
+        log.err("error printing to writer: {t}", .{err});
         return;
     };
     self.reportUntagged(fmt, args);

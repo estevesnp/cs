@@ -143,12 +143,8 @@ fn addPaths(ctx: *Context, paths: []const []const u8) !void {
 
     var cfg = cfg_context.config;
 
-    var path_set: std.StringArrayHashMapUnmanaged(void) = .empty;
+    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.roots, &.{});
     defer path_set.deinit(arena);
-
-    for (cfg.roots) |root| {
-        try path_set.put(arena, root, {});
-    }
 
     const cwd = std.fs.cwd();
     for (paths) |path| {
