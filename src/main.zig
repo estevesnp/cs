@@ -89,7 +89,6 @@ fn env() !void {
     try fs.File.stdout().writeAll("env\n");
 }
 
-/// adding paths and shit
 fn addPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 

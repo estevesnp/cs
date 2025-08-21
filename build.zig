@@ -46,6 +46,17 @@ pub fn build(b: *std.Build) !void {
         run_cmd.addArgs(args);
     }
 
+    { // docs
+        const docs_install = b.addInstallDirectory(.{
+            .source_dir = exe.getEmittedDocs(),
+            .install_dir = .prefix,
+            .install_subdir = "docs",
+        });
+
+        const docs_step = b.step("docs", "Generate docs");
+        docs_step.dependOn(&docs_install.step);
+    }
+
     { // test
         const exe_tests = b.addTest(.{
             .root_module = b.createModule(.{
