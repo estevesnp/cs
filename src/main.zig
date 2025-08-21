@@ -1,15 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const options = @import("options");
+const fs = std.fs;
 const process = std.process;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-const log = std.log.scoped(.main);
-
 const config = @import("config.zig");
 const cli = @import("cli.zig");
-const Diag = @import("Diag.zig");
 
 const USAGE =
     \\usage: cs [project] [flags]
@@ -40,26 +38,6 @@ const USAGE =
     \\
 ;
 
-const Context = struct {
-    arena: Allocator,
-    env_map: *process.EnvMap,
-    diag: *Diag,
-
-    pub fn init(arena: Allocator, writer: *std.Io.Writer) process.GetEnvMapError!Context {
-        const env_map = try arena.create(process.EnvMap);
-        env_map.* = try process.getEnvMap(arena);
-
-        const diag = try arena.create(Diag);
-        diag.* = .init(writer);
-
-        return .{
-            .arena = arena,
-            .env_map = env_map,
-            .diag = diag,
-        };
-    }
-};
-
 pub fn main() !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 
@@ -77,62 +55,62 @@ pub fn main() !void {
     const arena = arena_state.allocator();
 
     var stderr_buf: [1024]u8 = undefined;
-    var stderr = std.fs.File.stderr().writer(&stderr_buf);
+    var stderr = fs.File.stderr().writer(&stderr_buf);
 
-    var context: Context = try .init(arena, &stderr.interface);
+    const diag: cli.Diagnostic = .{ .writer = &stderr.interface };
 
     const args = try process.argsAlloc(arena);
 
-    const command = try cli.parse(context.diag, args);
+    const command = try cli.parse(&diag, args);
 
     switch (command) {
-        .help => try std.fs.File.stdout().writeAll(USAGE),
-        .version => printAndExit("{f}\n", .{options.cs_version}),
-        .env => log.info("env", .{}),
-        .@"add-paths" => |paths| try addPaths(&context, paths),
-        .search => |opts| try search(&context, opts),
+        .help => try help(),
+        .version => try version(),
+        .env => try env(),
+        .@"add-paths" => |paths| try addPaths(arena, paths),
+        .search => |opts| try search(arena, opts),
     }
 }
 
-fn printAndExit(comptime fmt: []const u8, args: anytype) noreturn {
-    var buf: [1024]u8 = undefined;
-    var stdout_bw = std.fs.File.stdout().writer(&buf);
-    const stdout_writer = &stdout_bw.interface;
-
-    stdout_writer.print(fmt, args) catch {
-        log.err("failed to  write to stdout\n", .{});
-        process.exit(1);
-    };
-
-    stdout_writer.flush() catch {
-        log.err("failed to flush stdout\n", .{});
-        process.exit(1);
-    };
-
-    process.exit(0);
+fn help() !void {
+    try fs.File.stdout().writeAll(USAGE);
 }
 
-fn addPaths(ctx: *Context, paths: []const []const u8) !void {
+fn version() !void {
+    var buf: [100]u8 = undefined;
+    var stdout_writer = fs.File.stdout().writer(&buf);
+    const stdout = &stdout_writer.interface;
+
+    try stdout.print("{f}\n", .{options.cs_version});
+    try stdout.flush();
+}
+
+fn env() !void {
+    try fs.File.stdout().writeAll("env\n");
+}
+
+/// adding paths and shit
+fn addPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    const arena = ctx.arena;
+    const env_map = try process.getEnvMap(arena);
 
-    var cfg_context = try config.openConfig(arena, ctx.env_map);
+    var cfg_context = try config.openConfig(arena, &env_map);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
 
-    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.roots, &.{});
+    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.project_roots, &.{});
     defer path_set.deinit(arena);
 
-    const cwd = std.fs.cwd();
+    const cwd = fs.cwd();
     for (paths) |path| {
         if (path.len == 0) continue;
         const real_path = try cwd.realpathAlloc(arena, path);
         try path_set.put(arena, real_path, {});
     }
 
-    cfg.roots = path_set.keys();
+    cfg.project_roots = path_set.keys();
 
     var cfg_file = cfg_context.config_file;
 
@@ -143,22 +121,23 @@ fn addPaths(ctx: *Context, paths: []const []const u8) !void {
     var file_bw = cfg_file.writer(&buf);
 
     const file_writer = &file_bw.interface;
-    defer file_writer.flush() catch ctx.diag.reportUntagged("error saving config", .{});
 
     try std.json.Stringify.value(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, file_writer);
+    try file_writer.flush();
 }
 
-fn search(ctx: *Context, search_opts: cli.SearchOpts) !void {
+fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
     _ = search_opts;
-    const arena = ctx.arena;
 
-    var cfg_context = try config.openConfig(arena, ctx.env_map);
-    defer cfg_context.deinit();
+    const env_map = try process.getEnvMap(arena);
+
+    var cfg_context = try config.openConfig(arena, &env_map);
+    cfg_context.config_file.close();
 
     const cfg = cfg_context.config;
 
-    if (cfg.roots.len == 0) {
-        ctx.diag.reportUntagged("no project roots found. add one using the '--add-paths' flag", .{});
+    if (cfg.project_roots.len == 0) {
+        try fs.File.stderr().writeAll("no project roots found. add one using the '--add-paths' flag");
         process.exit(1);
     }
 }

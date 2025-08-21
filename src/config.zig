@@ -1,12 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const fs = std.fs;
+const process = std.process;
+const Allocator = std.mem.Allocator;
+
 const cli = @import("cli.zig");
-const Diag = @import("Diag.zig");
 
 const SearchAction = cli.SearchAction;
 
 pub const Config = struct {
-    roots: []const []const u8 = &.{},
+    /// directories to search for projects
+    project_roots: []const []const u8 = &.{},
     /// fzf preview command. --no-preview sets this as an empty string
     preview: ?[]const u8 = null,
     /// tmux script to run after a new session
@@ -16,7 +20,7 @@ pub const Config = struct {
 };
 
 pub const ConfigContext = struct {
-    config_file: std.fs.File,
+    config_file: fs.File,
     config: Config,
 
     pub fn deinit(self: *ConfigContext) void {
@@ -24,11 +28,11 @@ pub const ConfigContext = struct {
     }
 };
 
-pub fn openConfig(arena: std.mem.Allocator, env_map: *const std.process.EnvMap) !ConfigContext {
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+pub fn openConfig(arena: Allocator, env_map: *const process.EnvMap) !ConfigContext {
+    var path_buf: [fs.max_path_bytes]u8 = undefined;
     const config_path = try getConfigPath(&path_buf, env_map);
 
-    var config_dir = try std.fs.cwd().makeOpenPath(config_path, .{});
+    var config_dir = try fs.cwd().makeOpenPath(config_path, .{});
     defer config_dir.close();
 
     var config_missing = false;
@@ -69,7 +73,7 @@ pub fn openConfig(arena: std.mem.Allocator, env_map: *const std.process.EnvMap) 
     };
 }
 
-fn getConfigPath(path_buf: []u8, env_map: *const std.process.EnvMap) ![]u8 {
+fn getConfigPath(path_buf: []u8, env_map: *const process.EnvMap) ![]u8 {
     switch (builtin.os.tag) {
         .windows => return try joinPaths(path_buf, &.{ env_map.get("APPDATA").?, "cs" }),
         else => {
@@ -99,7 +103,7 @@ fn joinPaths(buf: []u8, sub_paths: []const []const u8) error{BufTooSmall}![]u8 {
         idx += sub_path.len;
 
         if (sub_idx < sub_paths.len - 1) {
-            buf[idx] = std.fs.path.sep;
+            buf[idx] = fs.path.sep;
             idx += 1;
         }
     }
@@ -113,23 +117,23 @@ test "ref all decls" {
 
 test joinPaths {
     {
-        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        var buf: [fs.max_path_bytes]u8 = undefined;
         try std.testing.expectEqualStrings("abc/def/ghi", try joinPaths(&buf, &.{ "abc", "def", "ghi" }));
     }
     {
-        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        var buf: [fs.max_path_bytes]u8 = undefined;
         try std.testing.expectEqualStrings("abc/def", try joinPaths(&buf, &.{ "abc", "def" }));
     }
     {
-        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        var buf: [fs.max_path_bytes]u8 = undefined;
         try std.testing.expectEqualStrings("abc", try joinPaths(&buf, &.{"abc"}));
     }
     {
-        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        var buf: [fs.max_path_bytes]u8 = undefined;
         try std.testing.expectEqualStrings("", try joinPaths(&buf, &.{""}));
     }
     {
-        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        var buf: [fs.max_path_bytes]u8 = undefined;
         try std.testing.expectEqualStrings("/", try joinPaths(&buf, &.{ "", "" }));
     }
 

@@ -1,12 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-
 const mem = std.mem;
-
+const Writer = std.Io.Writer;
 const assert = std.debug.assert;
-
-const Diag = @import("Diag.zig");
-const Tag = Diag.Tag;
 
 const default_fzf_preview = switch (builtin.os.tag) {
     // works in cmd and powershell
@@ -54,7 +50,7 @@ pub const ArgParseError = error{ IllegalArgument, MissingArgument };
 
 /// parses args. assumes first argument is the program
 /// doesn't own the memory, so is valid as long as the `args` argument
-pub fn parse(diag: *Diag, args: []const []const u8) ArgParseError!Command {
+pub fn parse(diag: *const Diagnostic, args: []const []const u8) ArgParseError!Command {
     var iter: ArgIterator = .init(args);
     assert(iter.next() != null);
 
@@ -92,7 +88,7 @@ pub fn parse(diag: *Diag, args: []const []const u8) ArgParseError!Command {
             };
         } else if (mem.startsWith(u8, arg, "--")) {
             search_opts.action = std.meta.stringToEnum(SearchAction, arg[2..]) orelse {
-                diag.reportUntagged("illegal flag: {s}", .{arg});
+                diag.reportMessage("illegal flag: {s}", .{arg});
                 return error.IllegalArgument;
             };
         } else {
@@ -107,7 +103,7 @@ fn isFlag(arg: []const u8) bool {
     return arg.len > 0 and arg[0] == '-';
 }
 
-fn getPaths(iter: *ArgIterator, diag: *Diag) ![]const []const u8 {
+fn getPaths(iter: *ArgIterator, diag: *const Diagnostic) ArgParseError![]const []const u8 {
     const start = iter.pos;
 
     while (iter.next()) |arg| {
@@ -136,8 +132,8 @@ fn getPaths(iter: *ArgIterator, diag: *Diag) ![]const []const u8 {
 fn getNextValidArg(
     iter: *ArgIterator,
     tag: Tag,
-    diag: *Diag,
-) error{ MissingArgument, IllegalArgument }![]const u8 {
+    diag: *const Diagnostic,
+) ArgParseError![]const u8 {
     const arg = iter.next() orelse {
         diag.report(tag, "expected argument, none found", .{});
         return error.MissingArgument;
@@ -152,7 +148,7 @@ fn getNextValidArg(
 fn validateFirstArg(
     iter: *ArgIterator,
     tag: Tag,
-    diag: *Diag,
+    diag: *const Diagnostic,
 ) error{IllegalArgument}!void {
     const arg_pos = iter.pos - 1;
     if (arg_pos != 1) {
@@ -164,7 +160,7 @@ fn validateFirstArg(
 fn validateSingleArg(
     iter: *ArgIterator,
     tag: Tag,
-    diag: *Diag,
+    diag: *const Diagnostic,
 ) error{IllegalArgument}!void {
     try validateFirstArg(iter, tag, diag);
     if (iter.next()) |arg| {
@@ -198,6 +194,62 @@ const ArgIterator = struct {
         self.pos += 1;
         return item;
     }
+};
+
+pub const Diagnostic = struct {
+    writer: *Writer,
+
+    pub fn reportMessage(
+        self: *const Diagnostic,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) void {
+        self.writer.print(fmt ++ "\n", args) catch {};
+        self.writer.flush() catch {};
+    }
+
+    pub fn report(
+        self: *const Diagnostic,
+        tag: Tag,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) void {
+        self.writer.print("error parsing {t} flag: ", .{tag}) catch {};
+        self.reportMessage(fmt, args);
+    }
+};
+
+/// enum derived from the `Command` fields
+/// used for tagging diagnostic messages
+const Tag = blk: {
+    const cmd_fields = @typeInfo(Command).@"union".fields;
+    const search_fields = @typeInfo(SearchOpts).@"struct".fields;
+
+    const num_fields = cmd_fields.len + search_fields.len;
+    var fields: [num_fields]std.builtin.Type.EnumField = undefined;
+
+    var idx = 0;
+    for (cmd_fields) |field| {
+        // 'search' isn't a flag
+        if (@FieldType(Command, field.name) == SearchOpts) continue;
+
+        fields[idx] = .{ .name = field.name, .value = idx };
+        idx += 1;
+    }
+
+    for (search_fields) |field| {
+        fields[idx] = .{ .name = field.name, .value = idx };
+        idx += 1;
+    }
+
+    const enum_info: std.builtin.Type.Enum = .{
+        .tag_type = u8,
+        .fields = fields[0..idx],
+        .decls = &.{},
+        .is_exhaustive = true,
+    };
+
+    break :blk @Type(.{ .@"enum" = enum_info });
 };
 
 test "ref all decls" {
@@ -241,20 +293,20 @@ test ArgIterator {
 }
 
 fn testFailure(args: []const []const u8, comptime expected_message: []const u8, expected_error: ArgParseError) !void {
-    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
-    var diag: Diag = .init(&writer.writer);
+    const diag: Diagnostic = .{ .writer = &writer.writer };
 
     try std.testing.expectError(expected_error, parse(&diag, args));
     try std.testing.expectEqualStrings(expected_message, writer.written());
 }
 
 test "parse --help correctly" {
-    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
-    var diag: Diag = .init(&writer.writer);
+    const diag: Diagnostic = .{ .writer = &writer.writer };
 
     const help_flags: []const []const u8 = &.{ "--help", "-h" };
     for (help_flags) |flag| {
@@ -281,10 +333,10 @@ test "correctly fails bad --help usage" {
 }
 
 test "parse --version correctly" {
-    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
-    var diag: Diag = .init(&writer.writer);
+    const diag: Diagnostic = .{ .writer = &writer.writer };
 
     const version_flags: []const []const u8 = &.{ "--version", "-v", "-V" };
     for (version_flags) |flag| {
@@ -311,10 +363,10 @@ test "correctly fails bad --version usage" {
 }
 
 test "parse --env correctly" {
-    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
-    var diag: Diag = .init(&writer.writer);
+    const diag: Diagnostic = .{ .writer = &writer.writer };
 
     try std.testing.expectEqual(.env, try parse(&diag, &.{ "cs", "--env" }));
     try std.testing.expectEqual(0, writer.written().len);
@@ -335,10 +387,10 @@ test "correctly fails bad --env usage" {
 }
 
 fn testPaths(args: []const []const u8, expected_paths: []const []const u8) !void {
-    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
-    var diag: Diag = .init(&writer.writer);
+    const diag: Diagnostic = .{ .writer = &writer.writer };
 
     const result = try parse(&diag, args);
     const paths = result.@"add-paths";
@@ -409,10 +461,10 @@ test "correctly fails bad flag" {
 }
 
 fn testSearchCommand(args: []const []const u8, expected_search_opts: SearchOpts) !void {
-    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
-    var diag: Diag = .init(&writer.writer);
+    const diag: Diagnostic = .{ .writer = &writer.writer };
 
     const result = try parse(&diag, args);
     const search_opts = result.search;
