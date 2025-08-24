@@ -139,6 +139,13 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
         try fs.File.stderr().writeAll("no project roots found. add one using the '--add-paths' flag");
         process.exit(1);
     }
+
+    const walk = @import("walk.zig");
+    for (cfg.project_roots) |root| {
+        std.debug.print("searching {s}...\n", .{root});
+        try walk.search(arena, root);
+        std.debug.print("\n", .{});
+    }
 }
 
 test "ref all decls" {
