@@ -1,5 +1,6 @@
 const std = @import("std");
 const fs = std.fs;
+const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Writer = std.Io.Writer;
@@ -218,6 +219,230 @@ fn anyEql(haystack: []const []const u8, needle: []const u8) bool {
         if (std.mem.eql(u8, str, needle)) return true;
     }
     return false;
+}
+
+test "searchProjects returns correct projects" {
+    const gpa = testing.allocator;
+
+    var tmp_dir_state = testing.tmpDir(.{});
+    defer tmp_dir_state.cleanup();
+
+    const tmp_dir = tmp_dir_state.dir;
+
+    const base_path = try tmp_dir.realpathAlloc(gpa, ".");
+    defer gpa.free(base_path);
+
+    try test_mountFilesystem(gpa, tmp_dir);
+
+    try test_assertProjects(
+        gpa,
+        &.{
+            &.{base_path},
+        },
+        &.{
+            &.{ base_path, "root-1", "nest-1-1", "proj-1-1-1" },
+            &.{ base_path, "root-1", "proj-1-1" },
+            &.{ base_path, "root-1", "proj-1-2" },
+            &.{ base_path, "root-2", "proj-2-1" },
+            &.{ base_path, "root-3" },
+        },
+    );
+
+    try test_assertProjects(
+        gpa,
+        &.{
+            &.{base_path},
+            &.{ base_path, "root-1" },
+            &.{ base_path, "root-2" },
+            &.{ base_path, "root-3" },
+        },
+        &.{
+            &.{ base_path, "root-1", "nest-1-1", "proj-1-1-1" },
+            &.{ base_path, "root-1", "proj-1-1" },
+            &.{ base_path, "root-1", "proj-1-2" },
+            &.{ base_path, "root-2", "proj-2-1" },
+            &.{ base_path, "root-3" },
+        },
+    );
+
+    try test_assertProjects(
+        gpa,
+        &.{
+            &.{ base_path, "root-1" },
+        },
+        &.{
+            &.{ base_path, "root-1", "nest-1-1", "proj-1-1-1" },
+            &.{ base_path, "root-1", "proj-1-1" },
+            &.{ base_path, "root-1", "proj-1-2" },
+        },
+    );
+
+    try test_assertProjects(
+        gpa,
+        &.{
+            &.{ base_path, "root-2" },
+            &.{ base_path, "root-3" },
+            &.{ base_path, "root-4" },
+        },
+        &.{
+            &.{ base_path, "root-2", "proj-2-1" },
+            &.{ base_path, "root-3" },
+        },
+    );
+
+    try test_assertProjects(
+        gpa,
+        &.{
+            &.{ base_path, "root-4" },
+        },
+        &.{},
+    );
+
+    try test_assertProjects(
+        gpa,
+        &.{
+            &.{ base_path, "root-2" },
+            &.{ base_path, "root-2" },
+        },
+        &.{
+            &.{ base_path, "root-2", "proj-2-1" },
+        },
+    );
+}
+
+fn test_assertProjects(
+    gpa: Allocator,
+    root_paths: []const []const []const u8,
+    expected_projects_paths: []const []const []const u8,
+) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const roots = try arena.alloc([]const u8, root_paths.len);
+    for (root_paths, roots) |path, *root| {
+        root.* = try fs.path.join(arena, path);
+    }
+
+    const expected_projects = try arena.alloc([]const u8, expected_projects_paths.len);
+
+    for (expected_projects_paths, expected_projects) |path, *proj| {
+        proj.* = try fs.path.join(arena, path);
+    }
+
+    var alloc_writer = Writer.Allocating.init(arena);
+
+    var project_set = try searchProjects(gpa, roots, .{
+        .writer = &alloc_writer.writer,
+        .flush_after = .end,
+    });
+    defer freeProjects(gpa, &project_set);
+
+    const returned_projects = project_set.keys();
+
+    var written_projects: [][]const u8 = try arena.alloc([]const u8, expected_projects.len);
+
+    var iter = std.mem.splitScalar(u8, alloc_writer.written(), '\n');
+    var idx: usize = 0;
+    while (iter.next()) |proj| : (idx += 1) {
+        if (idx >= returned_projects.len) {
+            // should be the final project
+            try testing.expectEqual(0, proj.len);
+            try testing.expectEqual(null, iter.next());
+            break;
+        }
+        written_projects[idx] = proj;
+    }
+
+    try testing.expectEqual(expected_projects.len, returned_projects.len);
+
+    for (expected_projects) |expected| {
+        if (!anyEql(returned_projects, expected)) {
+            std.debug.print("expected '{s}' not found\n", .{expected});
+            std.debug.print("actual returned projects:\n", .{});
+            for (returned_projects) |p| std.debug.print("  '{s}'\n", .{p});
+            return error.NoMatch;
+        }
+        if (!anyEql(written_projects, expected)) {
+            std.debug.print("expected '{s}' not found\n", .{expected});
+            std.debug.print("actual written projects:\n", .{});
+            for (written_projects) |p| std.debug.print("  '{s}'\n", .{p});
+            return error.NoMatch;
+        }
+    }
+}
+
+const TestFile = struct {
+    name: []const u8,
+    type: enum { file, directory },
+    children: ?[]TestFile = null,
+};
+
+fn test_mountFilesystem(gpa: Allocator, root: fs.Dir) !void {
+    // /
+    // ├── root-1
+    // │   ├── a-file.txt
+    // │   ├── nest-1-1
+    // │   │   ├── not-proj-1-1-1
+    // │   │   │   └── documents.csv
+    // │   │   └── proj-1-1-1
+    // │   │       └── .git
+    // │   ├── not-proj-1-1
+    // │   │   └── empty
+    // │   │       └── emptier
+    // │   │           └── foo.txt
+    // │   ├── proj-1-1
+    // │   │   ├── .abc
+    // │   │   ├── .git
+    // │   │   └── text.txt
+    // │   └── proj-1-2
+    // │       ├── .jj
+    // │       └── README.md
+    // ├── root-2
+    // │   └── proj-2-1
+    // │       ├── .jj
+    // │       └── src
+    // │           └── main.c
+    // ├── root-3
+    // │   ├── .git
+    // │   └── ziglab
+    // │       └── .git
+    // └── root-4
+    //     ├── bar
+    //     │   └── baz
+    //     │       └── b.txt
+    //     └── foo
+    //         └── a.txt
+
+    var tree_file = try fs.cwd().openFile("test/walk-tree.json", .{});
+    defer tree_file.close();
+
+    var buf: [4096]u8 = undefined;
+    var file_br = tree_file.reader(&buf);
+    var json_reader = std.json.Reader.init(gpa, &file_br.interface);
+    defer json_reader.deinit();
+
+    var rest = try std.json.parseFromTokenSource([]TestFile, gpa, &json_reader, .{});
+    defer rest.deinit();
+
+    for (rest.value) |info| {
+        try test_createFilesystem(root, info);
+    }
+}
+
+fn test_createFilesystem(parent: fs.Dir, info: TestFile) !void {
+    if (info.type == .file) {
+        var f = try parent.createFile(info.name, .{});
+        f.close();
+        return;
+    }
+
+    var next = try parent.makeOpenPath(info.name, .{});
+    defer next.close();
+
+    if (info.children) |children| {
+        for (children) |dir| try test_createFilesystem(next, dir);
+    }
 }
 
 test "ref all decls" {
