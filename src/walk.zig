@@ -4,8 +4,11 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Writer = std.Io.Writer;
+const assert = std.debug.assert;
 
 const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
+
+pub const SearchError = fs.File.OpenError || Allocator.Error || Writer.Error;
 
 /// when to flush the writer
 pub const FlushAfter = enum {
@@ -119,7 +122,11 @@ const Context = struct {
 
 /// scan for projects and write their full path to provided writer.
 /// return number of projects found
-pub fn scanProjects(gpa: Allocator, root_paths: []const []const u8, opts: ScanOpts) !usize {
+pub fn scanProjects(
+    gpa: Allocator,
+    root_paths: []const []const u8,
+    opts: ScanOpts,
+) SearchError!usize {
     var ctx = try search(gpa, root_paths, .{ .scan_opts = opts });
     defer ctx.deinit(gpa);
 
@@ -128,7 +135,11 @@ pub fn scanProjects(gpa: Allocator, root_paths: []const []const u8, opts: ScanOp
 
 /// search for projects and return their full path as a set.
 /// if no arena is used, caller must free the return object. check `freeProjects`
-pub fn searchProjects(gpa: Allocator, root_paths: []const []const u8, opts: SearchOpts) !std.StringArrayHashMapUnmanaged(void) {
+pub fn searchProjects(
+    gpa: Allocator,
+    root_paths: []const []const u8,
+    opts: SearchOpts,
+) SearchError!std.StringArrayHashMapUnmanaged(void) {
     var ctx = try search(gpa, root_paths, .{ .search_opts = opts });
     defer ctx.deinit(gpa);
 
@@ -143,7 +154,9 @@ pub fn freeProjects(gpa: Allocator, projects: *std.StringArrayHashMapUnmanaged(v
     projects.deinit(gpa);
 }
 
-fn search(gpa: Allocator, root_paths: []const []const u8, opts: ContextOptions) !Context {
+fn search(gpa: Allocator, root_paths: []const []const u8, opts: ContextOptions) SearchError!Context {
+    assert(root_paths.len > 0);
+
     var ctx: Context = .init(opts);
 
     for (root_paths) |root_path| {
@@ -166,7 +179,7 @@ fn search(gpa: Allocator, root_paths: []const []const u8, opts: ContextOptions) 
     return ctx;
 }
 
-fn searchDir(gpa: Allocator, ctx: *Context, dir: fs.Dir, depth: usize) !void {
+fn searchDir(gpa: Allocator, ctx: *Context, dir: fs.Dir, depth: usize) SearchError!void {
     if (depth > ctx.max_depth) return;
 
     const to_check_start_idx = ctx.to_check_stack.items.len;
