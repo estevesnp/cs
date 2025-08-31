@@ -3,11 +3,13 @@ const builtin = @import("builtin");
 const options = @import("options");
 const fs = std.fs;
 const process = std.process;
+const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const config = @import("config.zig");
 const cli = @import("cli.zig");
+const walk = @import("walk.zig");
 
 const USAGE =
     \\usage: cs [project] [flags]
@@ -126,8 +128,6 @@ fn addPaths(arena: Allocator, paths: []const []const u8) !void {
 }
 
 fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
-    _ = search_opts;
-
     const env_map = try process.getEnvMap(arena);
 
     var cfg_context = try config.openConfig(arena, &env_map);
@@ -136,21 +136,133 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
     const cfg = cfg_context.config;
 
     if (cfg.project_roots.len == 0) {
-        try fs.File.stderr().writeAll("no project roots found. add one using the '--add-paths' flag");
+        try fs.File.stderr().writeAll("no project roots found. add one using the '--add-paths' flag\n");
         process.exit(1);
     }
 
-    const walk = @import("walk.zig");
+    const preview = search_opts.preview orelse cfg.preview;
+
+    // TODO: handle fzf not available
+    var fzf_proc = try spawnFzf(arena, search_opts.project, preview);
+
+    var fzf_stdin = fzf_proc.stdin.?;
 
     var buf: [2048]u8 = undefined;
-    var stdout_bw = fs.File.stdout().writer(&buf);
-    const stdout = &stdout_bw.interface;
+    var fzf_bw = fzf_stdin.writer(&buf);
+    const fzf_writer = &fzf_bw.interface;
 
-    const count = try walk.scanProjects(arena, cfg.project_roots, .{ .writer = stdout });
-    try stdout.print("found {d} projects\n", .{count});
-    try stdout.flush();
+    // TODO: catch error if a choice is made before search finishes
+    const project_set = try walk.searchProjects(arena, cfg.project_roots, .{
+        .writer = fzf_writer,
+        .flush_after = .project,
+    });
+
+    const projects = project_set.keys();
+
+    if (projects.len == 0) {
+        _ = try fzf_proc.kill();
+        try fs.File.stderr().writeAll("no project found\n");
+        process.exit(1);
+    }
+
+    fzf_stdin.close();
+    fzf_proc.stdin = null;
+
+    // +1 for the new line
+    var path_buf: [fs.max_path_bytes + 1]u8 = undefined;
+    const path = try getProjectPath(
+        &fzf_proc,
+        search_opts.project,
+        projects,
+        &path_buf,
+    ) orelse return;
+
+    std.debug.print("found {s}\n", .{path});
+}
+
+// TODO: properly handle errors and exiting fzf_proc
+fn getProjectPath(
+    fzf_proc: *process.Child,
+    project: []const u8,
+    project_paths: []const []const u8,
+    buf: []u8,
+) !?[]const u8 {
+    if (project.len > 0) {
+        if (matchProject(project, project_paths)) |match| {
+            // TODO: handle error / return value?
+            _ = try fzf_proc.kill();
+            return match;
+        }
+    }
+
+    var fzf_br = fzf_proc.stdout.?.reader(buf);
+    const fzf_reader = &fzf_br.interface;
+
+    const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
+        error.EndOfStream => return null,
+        else => return err,
+    };
+
+    _ = try fzf_proc.wait();
+
+    return path;
+}
+
+fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) process.Child.SpawnError!process.Child {
+    var fzf_proc = std.process.Child.init(&.{
+        "fzf",
+        "--reverse",
+        // TODO: finish flags
+        "--query",
+        project,
+        "--preview",
+        preview,
+    }, gpa);
+
+    fzf_proc.stdin_behavior = .Pipe;
+    fzf_proc.stdout_behavior = .Pipe;
+
+    try fzf_proc.spawn();
+
+    return fzf_proc;
+}
+
+fn matchProject(project: []const u8, project_paths: []const []const u8) ?[]const u8 {
+    var match: ?[]const u8 = null;
+
+    for (project_paths) |path| {
+        if (std.mem.endsWith(u8, path, project)) {
+            if (match != null) return null;
+            match = path;
+        }
+    }
+
+    return match;
+}
+
+test matchProject {
+    try testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{
+        "/foo/bar/123",
+        "/foo/bar/abc",
+        "/bar/bar/bar",
+    }).?);
+
+    try testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{"/foo/bar/abc"}).?);
+
+    try testing.expectEqual(null, matchProject("abc", &.{
+        "/foo/bar/123",
+        "/foo/bar/baz",
+        "/bar/bar/bar",
+    }));
+
+    try testing.expectEqual(null, matchProject("abc", &.{
+        "/foo/bar/123",
+        "/foo/bar/abc",
+        "/bar/bar/bar",
+        "/foo/baz/abc",
+    }));
 }
 
 test "ref all decls" {
-    std.testing.refAllDeclsRecursive(@This());
+    testing.refAllDeclsRecursive(@This());
 }
