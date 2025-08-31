@@ -158,6 +158,7 @@ fn search(gpa: Allocator, root_paths: []const []const u8, opts: ContextOptions) 
     assert(root_paths.len > 0);
 
     var ctx: Context = .init(opts);
+    errdefer ctx.deinit(gpa);
 
     for (root_paths) |root_path| {
         try ctx.changeRoot(gpa, root_path);
@@ -321,6 +322,27 @@ test "searchProjects returns correct projects" {
             &.{ base_path, "root-2", "proj-2-1" },
         },
     );
+}
+
+test "searchProjects doesn't leak memory on bad path" {
+    const gpa = testing.allocator;
+
+    var tmp_dir_state = testing.tmpDir(.{});
+    defer tmp_dir_state.cleanup();
+
+    const tmp_dir = tmp_dir_state.dir;
+
+    const base_path = try tmp_dir.realpathAlloc(gpa, ".");
+    defer gpa.free(base_path);
+
+    const root_paths: []const []const u8 = &.{
+        try fs.path.join(gpa, &.{ base_path, "root-1" }),
+        try fs.path.join(gpa, &.{ base_path, "non-existing-dir" }),
+    };
+    defer for (root_paths) |p| gpa.free(p);
+
+    try testing.expectError(error.FileNotFound, searchProjects(gpa, root_paths, .{}));
+    try testing.expectError(error.OutOfMemory, searchProjects(testing.failing_allocator, root_paths, .{}));
 }
 
 fn test_assertProjects(
