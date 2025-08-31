@@ -141,11 +141,14 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
     }
 
     const walk = @import("walk.zig");
-    for (cfg.project_roots) |root| {
-        std.debug.print("searching {s}...\n", .{root});
-        try walk.search(arena, root);
-        std.debug.print("\n", .{});
-    }
+
+    var buf: [2048]u8 = undefined;
+    var stdout_bw = fs.File.stdout().writer(&buf);
+    const stdout = &stdout_bw.interface;
+
+    const count = try walk.scanProjects(arena, cfg.project_roots, .{ .writer = stdout });
+    try stdout.print("found {d} projects\n", .{count});
+    try stdout.flush();
 }
 
 test "ref all decls" {
