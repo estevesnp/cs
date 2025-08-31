@@ -1,5 +1,7 @@
 name: Build and Test
 
+run-name: Build and run tests in ${{ github.ref_name }}
+
 on:
   push:
     branches: [ "main" ]
