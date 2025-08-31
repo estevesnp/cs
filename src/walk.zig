@@ -481,5 +481,5 @@ fn test_createFilesystem(parent: fs.Dir, info: TestFile) !void {
 }
 
 test "ref all decls" {
-    std.testing.refAllDeclsRecursive(@This());
+    testing.refAllDeclsRecursive(@This());
 }

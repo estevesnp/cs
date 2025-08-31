@@ -8,15 +8,21 @@ const cli = @import("cli.zig");
 
 const SearchAction = cli.SearchAction;
 
+const default_fzf_preview = switch (builtin.os.tag) {
+    // works in cmd and powershell
+    .windows => "dir {}",
+    else => "ls {}",
+};
+
 pub const Config = struct {
     /// directories to search for projects
     project_roots: []const []const u8 = &.{},
     /// fzf preview command. --no-preview sets this as an empty string
-    preview: ?[]const u8 = null,
+    preview: []const u8 = default_fzf_preview,
     /// tmux script to run after a new session
     script: ?[]const u8 = null,
     /// action to take on project found
-    action: ?SearchAction = null,
+    action: SearchAction = .session,
 };
 
 pub const ConfigContext = struct {
@@ -77,6 +83,7 @@ fn getConfigContext(arena: Allocator, config_path: []const u8) !ConfigContext {
     };
 }
 
+// TODO: check fs.getAppDataDir
 fn getConfigPath(path_buf: []u8, env_map: *const process.EnvMap) ![]u8 {
     switch (builtin.os.tag) {
         .windows => return try joinPaths(path_buf, &.{ env_map.get("APPDATA").?, "cs" }),

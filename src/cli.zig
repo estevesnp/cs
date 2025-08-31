@@ -4,12 +4,6 @@ const mem = std.mem;
 const Writer = std.Io.Writer;
 const assert = std.debug.assert;
 
-const default_fzf_preview = switch (builtin.os.tag) {
-    // works in cmd and powershell
-    .windows => "type {}",
-    else => "cat {}",
-};
-
 /// parsed user command
 pub const Command = union(enum) {
     /// print help
