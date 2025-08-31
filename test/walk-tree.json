@@ -1,0 +1,174 @@
+[
+  {
+    "name": "root-1",
+    "type": "directory",
+    "children": [
+      {
+        "name": "a-file.txt",
+        "type": "file"
+      },
+      {
+        "name": "nest-1-1",
+        "type": "directory",
+        "children": [
+          {
+            "name": "not-proj-1-1-1",
+            "type": "directory",
+            "children": [
+              {
+                "name": "documents.csv",
+                "type": "file"
+              }
+            ]
+          },
+          {
+            "name": "proj-1-1-1",
+            "type": "directory",
+            "children": [
+              {
+                "name": ".git",
+                "type": "directory",
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "not-proj-1-1",
+        "type": "directory",
+        "children": [
+          {
+            "name": "empty",
+            "type": "directory",
+            "children": [
+              {
+                "name": "emptier",
+                "type": "directory",
+                "children": [
+                  {
+                    "name": "foo.txt",
+                    "type": "file"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "proj-1-1",
+        "type": "directory",
+        "children": [
+          {
+            "name": ".abc",
+            "type": "file"
+          },
+          {
+            "name": ".git",
+            "type": "directory",
+            "children": []
+          },
+          {
+            "name": "text.txt",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "proj-1-2",
+        "type": "directory",
+        "children": [
+          {
+            "name": ".jj",
+            "type": "directory",
+            "children": []
+          },
+          {
+            "name": "README.md",
+            "type": "file"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "root-2",
+    "type": "directory",
+    "children": [
+      {
+        "name": "proj-2-1",
+        "type": "directory",
+        "children": [
+          {
+            "name": ".jj",
+            "type": "file"
+          },
+          {
+            "name": "src",
+            "type": "directory",
+            "children": [
+              {
+                "name": "main.c",
+                "type": "file"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "root-3",
+    "type": "directory",
+    "children": [
+      {
+        "name": ".git",
+        "type": "directory",
+        "children": []
+      },
+      {
+        "name": "ziglab",
+        "type": "directory",
+        "children": [
+          {
+            "name": ".git",
+            "type": "file"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "root-4",
+    "type": "directory",
+    "children": [
+      {
+        "name": "bar",
+        "type": "directory",
+        "children": [
+          {
+            "name": "baz",
+            "type": "directory",
+            "children": [
+              {
+                "name": "b.txt",
+                "type": "file"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "foo",
+        "type": "directory",
+        "children": [
+          {
+            "name": "a.txt",
+            "type": "file"
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -139,6 +139,16 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
         try fs.File.stderr().writeAll("no project roots found. add one using the '--add-paths' flag");
         process.exit(1);
     }
+
+    const walk = @import("walk.zig");
+
+    var buf: [2048]u8 = undefined;
+    var stdout_bw = fs.File.stdout().writer(&buf);
+    const stdout = &stdout_bw.interface;
+
+    const count = try walk.scanProjects(arena, cfg.project_roots, .{ .writer = stdout });
+    try stdout.print("found {d} projects\n", .{count});
+    try stdout.flush();
 }
 
 test "ref all decls" {

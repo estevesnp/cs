@@ -32,6 +32,10 @@ pub fn openConfig(arena: Allocator, env_map: *const process.EnvMap) !ConfigConte
     var path_buf: [fs.max_path_bytes]u8 = undefined;
     const config_path = try getConfigPath(&path_buf, env_map);
 
+    return getConfigContext(arena, config_path);
+}
+
+fn getConfigContext(arena: Allocator, config_path: []const u8) !ConfigContext {
     var config_dir = try fs.cwd().makeOpenPath(config_path, .{});
     defer config_dir.close();
 
