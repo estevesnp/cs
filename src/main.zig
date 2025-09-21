@@ -11,6 +11,9 @@ const config = @import("config.zig");
 const cli = @import("cli.zig");
 const walk = @import("walk.zig");
 
+const FZF_NO_MATCH_EXIT_CODE: u8 = 1;
+const FZF_INTERRUPT_EXIT_CODE: u8 = 130;
+
 const USAGE =
     \\usage: cs [project] [flags]
     \\
@@ -142,81 +145,106 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
 
     const preview = search_opts.preview orelse cfg.preview;
 
-    // TODO: handle fzf not available
     var fzf_proc = try spawnFzf(arena, search_opts.project, preview);
 
-    var fzf_stdin = fzf_proc.stdin.?;
+    // +1 for the new line
+    var path_buf: [fs.max_path_bytes + 1]u8 = undefined;
+    const path = searchProject(
+        arena,
+        &fzf_proc,
+        cfg.project_roots,
+        search_opts.project,
+        &path_buf,
+    ) catch |err| switch (err) {
+        error.FzfNotFound => {
+            try fs.File.stderr().writeAll("fzf binary not found in path\n");
+            process.exit(1);
+        },
+        else => return err,
+    };
 
-    var buf: [2048]u8 = undefined;
-    var fzf_bw = fzf_stdin.writer(&buf);
-    const fzf_writer = &fzf_bw.interface;
+    if (path) |p| {
+        std.debug.print("found {s}\n", .{p});
+    } else {
+        std.debug.print("search aborted\n", .{});
+    }
+}
 
-    // TODO: catch error if a choice is made before search finishes
-    const project_set = try walk.searchProjects(arena, cfg.project_roots, .{
-        .writer = fzf_writer,
+// terminates fzf_proc
+fn searchProject(
+    arena: Allocator,
+    fzf_proc: *process.Child,
+    roots: []const []const u8,
+    project_query: []const u8,
+    path_buf: []u8,
+) !?[]const u8 {
+    var buf: [256]u8 = undefined;
+    var fzf_bw = fzf_proc.stdin.?.writer(&buf);
+    const fzf_stdin = &fzf_bw.interface;
+
+    const project_set = walk.searchProjects(arena, roots, .{
+        .writer = fzf_stdin,
         .flush_after = .project,
-    });
+    }) catch |err| return switch (err) {
+        // select early
+        error.WriteFailed => extractProject(fzf_proc, path_buf),
+        else => err,
+    };
 
     const projects = project_set.keys();
 
     if (projects.len == 0) {
         _ = try fzf_proc.kill();
-        try fs.File.stderr().writeAll("no project found\n");
+        try fs.File.stderr().writeAll("no projects found\n");
         process.exit(1);
     }
 
-    fzf_stdin.close();
+    fzf_proc.stdin.?.close();
     fzf_proc.stdin = null;
 
-    // +1 for the new line
-    var path_buf: [fs.max_path_bytes + 1]u8 = undefined;
-    const path = try getProjectPath(
-        &fzf_proc,
-        search_opts.project,
-        projects,
-        &path_buf,
-    ) orelse return;
-
-    std.debug.print("found {s}\n", .{path});
-}
-
-// TODO: properly handle errors and exiting fzf_proc
-fn getProjectPath(
-    fzf_proc: *process.Child,
-    project: []const u8,
-    project_paths: []const []const u8,
-    buf: []u8,
-) !?[]const u8 {
-    if (project.len > 0) {
-        if (matchProject(project, project_paths)) |match| {
-            // TODO: handle error / return value?
-            _ = try fzf_proc.kill();
-            return match;
-        }
+    if (matchProject(project_query, projects)) |matched_path| {
+        _ = try fzf_proc.kill();
+        return matched_path;
     }
 
-    var fzf_br = fzf_proc.stdout.?.reader(buf);
-    const fzf_reader = &fzf_br.interface;
+    return extractProject(fzf_proc, path_buf);
+}
+
+fn extractProject(fzf_proc: *process.Child, buf: []u8) !?[]const u8 {
+    var br = fzf_proc.stdout.?.reader(buf);
+    const fzf_reader = &br.interface;
 
     const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
-        error.EndOfStream => return null,
+        error.EndOfStream => null,
         else => return err,
     };
 
-    _ = try fzf_proc.wait();
+    const exit = fzf_proc.wait() catch |err| switch (err) {
+        error.FileNotFound => return error.FzfNotFound,
+        else => return err,
+    };
 
-    return path;
+    return switch (exit) {
+        .Exited => |code| switch (code) {
+            0 => path,
+            FZF_NO_MATCH_EXIT_CODE, FZF_INTERRUPT_EXIT_CODE => null,
+            else => error.NonZeroExitCode,
+        },
+        else => error.BadTermination,
+    };
 }
 
 fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) process.Child.SpawnError!process.Child {
     var fzf_proc = std.process.Child.init(&.{
         "fzf",
+        "--header=choose a repo",
         "--reverse",
-        // TODO: finish flags
-        "--query",
-        project,
+        "--scheme=path",
+        "--preview-label=[ repository files ]",
         "--preview",
         preview,
+        "--query",
+        project,
     }, gpa);
 
     fzf_proc.stdin_behavior = .Pipe;
@@ -228,6 +256,8 @@ fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) process.Ch
 }
 
 fn matchProject(project: []const u8, project_paths: []const []const u8) ?[]const u8 {
+    if (project.len == 0) return null;
+
     var match: ?[]const u8 = null;
 
     for (project_paths) |path| {
@@ -261,6 +291,8 @@ test matchProject {
         "/bar/bar/bar",
         "/foo/baz/abc",
     }));
+
+    try testing.expectEqual(null, matchProject("", &.{"/foo/bar/123"}));
 }
 
 test "ref all decls" {
