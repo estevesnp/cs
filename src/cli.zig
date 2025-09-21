@@ -12,8 +12,9 @@ pub const Command = union(enum) {
     version,
     // TODO: do we want config location only? do we print the config as well?
     env,
-    // TODO: do we want set_path and remove_path?
     @"add-paths": []const []const u8,
+    @"set-paths": []const []const u8,
+    @"remove-paths": []const []const u8,
     /// search for projects
     search: SearchOpts,
 };
@@ -23,8 +24,6 @@ pub const SearchAction = enum {
     session,
     /// open new tmux window with project
     window,
-    /// change directory to project
-    cd,
     /// print project directory
     print,
 };
@@ -65,7 +64,15 @@ pub fn parse(diag: *const Diagnostic, args: []const []const u8) ArgParseError!Co
         }
         if (eqlAny(&.{ "--add-paths", "-a" }, arg)) {
             try validateFirstArg(&iter, .@"add-paths", diag);
-            return .{ .@"add-paths" = try getPaths(&iter, diag) };
+            return .{ .@"add-paths" = try getPaths(&iter, .@"add-paths", diag) };
+        }
+        if (eqlAny(&.{ "--set-paths", "-s" }, arg)) {
+            try validateFirstArg(&iter, .@"set-paths", diag);
+            return .{ .@"set-paths" = try getPaths(&iter, .@"set-paths", diag) };
+        }
+        if (eqlAny(&.{ "--remove-paths", "-r" }, arg)) {
+            try validateFirstArg(&iter, .@"remove-paths", diag);
+            return .{ .@"remove-paths" = try getPaths(&iter, .@"remove-paths", diag) };
         }
         // search opts
         if (mem.eql(u8, "--preview", arg)) {
@@ -97,24 +104,28 @@ fn isFlag(arg: []const u8) bool {
     return arg.len > 0 and arg[0] == '-';
 }
 
-fn getPaths(iter: *ArgIterator, diag: *const Diagnostic) ArgParseError![]const []const u8 {
+fn getPaths(
+    iter: *ArgIterator,
+    tag: Tag,
+    diag: *const Diagnostic,
+) ArgParseError![]const []const u8 {
     const start = iter.pos;
 
     while (iter.next()) |arg| {
         // check if empty arg or flag is passed
         if (arg.len == 0) {
-            diag.report(.@"add-paths", "empty path", .{});
+            diag.report(tag, "empty path", .{});
             return error.IllegalArgument;
         }
         if (arg.len == 0 or arg[0] == '-') {
-            diag.report(.@"add-paths", "illegal path: {s}", .{arg});
+            diag.report(tag, "illegal path: {s}", .{arg});
             return error.IllegalArgument;
         }
     }
 
     const end = iter.pos;
     if (start == end) {
-        diag.report(.@"add-paths", "no path provided", .{});
+        diag.report(tag, "no path provided", .{});
         return error.MissingArgument;
     }
 
@@ -380,14 +391,19 @@ test "correctly fails bad --env usage" {
     );
 }
 
-fn testPaths(args: []const []const u8, expected_paths: []const []const u8) !void {
+fn testPaths(
+    comptime tag: PathFlagSet.PathTag,
+    args: []const []const u8,
+    expected_paths: []const []const u8,
+) !void {
     var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
     const result = try parse(&diag, args);
-    const paths = result.@"add-paths";
+
+    const paths = @field(result, @tagName(tag));
 
     try std.testing.expectEqual(expected_paths.len, paths.len);
     for (expected_paths, paths) |expected_path, path| {
@@ -396,47 +412,64 @@ fn testPaths(args: []const []const u8, expected_paths: []const []const u8) !void
     try std.testing.expectEqual(0, writer.written().len);
 }
 
-test "parse --add-paths correctly" {
-    const add_paths_flags: []const []const u8 = &.{ "--add-paths", "-a" };
-    for (add_paths_flags) |flag| {
-        try testPaths(&.{ "cs", flag, "a/b/c", "../../tmp" }, &.{ "a/b/c", "../../tmp" });
-        try testPaths(&.{ "cs", flag, "." }, &.{"."});
-        try testPaths(&.{ "cs", flag, "..", "../..", "../../.." }, &.{ "..", "../..", "../../.." });
+const PathFlagSet = struct {
+    const PathTag = enum { @"add-paths", @"set-paths", @"remove-paths" };
+
+    const values: []const PathFlagSet = &.{
+        .{ .tag = .@"add-paths", .flags = &.{ "--add-paths", "-a" } },
+        .{ .tag = .@"set-paths", .flags = &.{ "--set-paths", "-s" } },
+        .{ .tag = .@"remove-paths", .flags = &.{ "--remove-paths", "-r" } },
+    };
+
+    tag: PathTag,
+    flags: []const []const u8,
+};
+
+test "parse path flags correctly" {
+    inline for (PathFlagSet.values) |flag_set| {
+        const tag = flag_set.tag;
+        for (flag_set.flags) |flag| {
+            try testPaths(tag, &.{ "cs", flag, "a/b/c", "../../tmp" }, &.{ "a/b/c", "../../tmp" });
+            try testPaths(tag, &.{ "cs", flag, "." }, &.{"."});
+            try testPaths(tag, &.{ "cs", flag, "..", "../..", "../../.." }, &.{ "..", "../..", "../../.." });
+        }
     }
 }
 
 test "correctly fails bad --add-paths usage" {
-    const add_paths_flags: []const []const u8 = &.{ "--add-paths", "-a" };
-    for (add_paths_flags) |flag| {
-        try testFailure(
-            &.{ "cs", "my-project", flag, "a/b/c" },
-            "error parsing add-paths flag: expected to be the first flag, was number 2\n",
-            error.IllegalArgument,
-        );
+    inline for (PathFlagSet.values) |flag_set| {
+        const flag_name = @tagName(flag_set.tag);
+        for (flag_set.flags) |flag| {
+            try testFailure(
+                &.{ "cs", "my-project", flag, "a/b/c" },
+                "error parsing " ++ flag_name ++ " flag: expected to be the first flag, was number 2\n",
+                error.IllegalArgument,
+            );
 
-        try testFailure(
-            &.{ "cs", flag },
-            "error parsing add-paths flag: no path provided\n",
-            error.MissingArgument,
-        );
+            try testFailure(
+                &.{ "cs", flag },
+                "error parsing " ++ flag_name ++ " flag: no path provided\n",
+                error.MissingArgument,
+            );
 
-        try testFailure(
-            &.{ "cs", flag, "a/b/c", "--action", "cd" },
-            "error parsing add-paths flag: illegal path: --action\n",
-            error.IllegalArgument,
-        );
+            try testFailure(
+                &.{ "cs", flag, "a/b/c", "--action", "print" },
+                "error parsing " ++ flag_name ++ " flag: illegal path: --action\n",
+                error.IllegalArgument,
+            );
 
-        try testFailure(
-            &.{ "cs", flag, "--help" },
-            "error parsing add-paths flag: illegal path: --help\n",
-            error.IllegalArgument,
-        );
+            try testFailure(
+                &.{ "cs", flag, "--help" },
+                "error parsing " ++ flag_name ++ " flag: illegal path: --help\n",
+                error.IllegalArgument,
+            );
 
-        try testFailure(
-            &.{ "cs", flag, "" },
-            "error parsing add-paths flag: empty path\n",
-            error.IllegalArgument,
-        );
+            try testFailure(
+                &.{ "cs", flag, "" },
+                "error parsing " ++ flag_name ++ " flag: empty path\n",
+                error.IllegalArgument,
+            );
+        }
     }
 }
 
@@ -581,18 +614,6 @@ test "parse search command correctly" {
         });
     }
     { // action
-        try testSearchCommand(&.{ "cs", "--action", "cd" }, .{
-            .project = "",
-            .preview = null,
-            .script = null,
-            .action = .cd,
-        });
-        try testSearchCommand(&.{ "cs", "--cd" }, .{
-            .project = "",
-            .preview = null,
-            .script = null,
-            .action = .cd,
-        });
         try testSearchCommand(&.{ "cs", "--action", "print" }, .{
             .project = "",
             .preview = null,
@@ -605,13 +626,13 @@ test "parse search command correctly" {
             .script = null,
             .action = .print,
         });
-        try testSearchCommand(&.{ "cs", "--action", "cd", "--window" }, .{
+        try testSearchCommand(&.{ "cs", "--action", "print", "--window" }, .{
             .project = "",
             .preview = null,
             .script = null,
             .action = .window,
         });
-        try testSearchCommand(&.{ "cs", "--cd", "proj", "--session" }, .{
+        try testSearchCommand(&.{ "cs", "--print", "proj", "--session" }, .{
             .project = "proj",
             .preview = null,
             .script = null,
@@ -619,11 +640,11 @@ test "parse search command correctly" {
         });
     }
     { // mix
-        try testSearchCommand(&.{ "cs", "proj", "--preview", "bat {}", "--script", "echo hi", "--action", "cd" }, .{
+        try testSearchCommand(&.{ "cs", "proj", "--preview", "bat {}", "--script", "echo hi", "--action", "print" }, .{
             .project = "proj",
             .preview = "bat {}",
             .script = "echo hi",
-            .action = .cd,
+            .action = .print,
         });
         try testSearchCommand(&.{ "cs", "--session", "--preview", "bat {}", "proj" }, .{
             .project = "proj",

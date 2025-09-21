@@ -19,21 +19,23 @@ const USAGE =
     \\
     \\arguments:
     \\
-    \\  project                       project to automatically open if found
+    \\  project                          project to automatically open if found
     \\
     \\
     \\flags:
     \\
-    \\  -h, --help                    print this message
-    \\  -v, -V, --version             print version
-    \\  --env                         print config and environment information
-    \\  -a, --add-paths <path> [...]  update config adding search paths
-    \\  --no-preview                  disables fzf preview
-    \\  --preview <str>               preview command to pass to fzf
-    \\  --script  <str>               script to run on new tmux session
-    \\  --action  <action>            action to execute after finding repository.
-    \\                                  options: session, window, cd, print
-    \\                                  can also call the action directly, e.g. --cd
+    \\  -h, --help                       print this message
+    \\  -v, -V, --version                print version
+    \\  --env                            print config and environment information
+    \\  -a, --add-paths <path> [...]     update config adding search paths
+    \\  -s, --set-paths <path> [...]     update config overriding search paths
+    \\  -r, --remove-paths <path> [...]  update config removing search paths
+    \\  --no-preview                     disables fzf preview
+    \\  --preview <str>                  preview command to pass to fzf
+    \\  --script  <str>                  script to run on new tmux session
+    \\  --action  <action>               action to execute after finding repository.
+    \\                                     options: session, window, print
+    \\                                     can call the action directly, e.g. --print
     \\
     \\
     \\description:
@@ -78,6 +80,8 @@ pub fn main() !void {
         .version => try version(),
         .env => try env(),
         .@"add-paths" => |paths| try addPaths(arena, paths),
+        .@"set-paths" => |paths| try setPaths(arena, paths),
+        .@"remove-paths" => |paths| try removePaths(arena, paths),
         .search => |opts| try search(arena, opts),
     }
 }
@@ -97,6 +101,19 @@ fn version() !void {
 
 fn env() !void {
     try fs.File.stdout().writeAll("env\n");
+}
+
+fn updateConfig(cfg_file: fs.File, cfg: config.Config) !void {
+    try cfg_file.setEndPos(0);
+    try cfg_file.seekTo(0);
+
+    var buf: [1024]u8 = undefined;
+    var file_bw = cfg_file.writer(&buf);
+
+    const file_writer = &file_bw.interface;
+
+    try std.json.Stringify.value(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, file_writer);
+    try file_writer.flush();
 }
 
 fn addPaths(arena: Allocator, paths: []const []const u8) !void {
@@ -121,18 +138,57 @@ fn addPaths(arena: Allocator, paths: []const []const u8) !void {
 
     cfg.project_roots = path_set.keys();
 
-    var cfg_file = cfg_context.config_file;
+    try updateConfig(cfg_context.config_file, cfg);
+}
 
-    try cfg_file.setEndPos(0);
-    try cfg_file.seekTo(0);
+fn setPaths(arena: Allocator, paths: []const []const u8) !void {
+    assert(paths.len > 0);
 
-    var buf: [1024]u8 = undefined;
-    var file_bw = cfg_file.writer(&buf);
+    const env_map = try process.getEnvMap(arena);
 
-    const file_writer = &file_bw.interface;
+    var cfg_context = try config.openConfig(arena, &env_map);
+    defer cfg_context.deinit();
 
-    try std.json.Stringify.value(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, file_writer);
-    try file_writer.flush();
+    var cfg = cfg_context.config;
+
+    var path_set: std.StringArrayHashMapUnmanaged(void) = .empty;
+    defer path_set.deinit(arena);
+
+    const cwd = fs.cwd();
+    for (paths) |path| {
+        if (path.len == 0) continue;
+        const real_path = try cwd.realpathAlloc(arena, path);
+        try path_set.put(arena, real_path, {});
+    }
+
+    cfg.project_roots = path_set.keys();
+
+    try updateConfig(cfg_context.config_file, cfg);
+}
+
+fn removePaths(arena: Allocator, paths: []const []const u8) !void {
+    assert(paths.len > 0);
+
+    const env_map = try process.getEnvMap(arena);
+
+    var cfg_context = try config.openConfig(arena, &env_map);
+    defer cfg_context.deinit();
+
+    var cfg = cfg_context.config;
+
+    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.project_roots, &.{});
+    defer path_set.deinit(arena);
+
+    const cwd = fs.cwd();
+    for (paths) |path| {
+        if (path.len == 0) continue;
+        const real_path = try cwd.realpathAlloc(arena, path);
+        _ = path_set.swapRemove(real_path);
+    }
+
+    cfg.project_roots = path_set.keys();
+
+    try updateConfig(cfg_context.config_file, cfg);
 }
 
 fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
