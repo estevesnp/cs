@@ -43,6 +43,11 @@ const USAGE =
     \\
 ;
 
+fn exit(msg: []const u8) noreturn {
+    fs.File.stderr().writeAll(msg) catch {};
+    process.exit(1);
+}
+
 pub fn main() !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 
@@ -139,8 +144,7 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
     const cfg = cfg_context.config;
 
     if (cfg.project_roots.len == 0) {
-        try fs.File.stderr().writeAll("no project roots found. add one using the '--add-paths' flag\n");
-        process.exit(1);
+        exit("no project roots found. add one using the '--add-paths' flag\n");
     }
 
     const preview = search_opts.preview orelse cfg.preview;
@@ -156,10 +160,8 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
         search_opts.project,
         &path_buf,
     ) catch |err| switch (err) {
-        error.FzfNotFound => {
-            try fs.File.stderr().writeAll("fzf binary not found in path\n");
-            process.exit(1);
-        },
+        error.FzfNotFound => exit("fzf binary not found in path\n"),
+        error.NoProjectsFound => exit("no projects found\n"),
         else => return err,
     };
 
@@ -170,14 +172,23 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
     }
 }
 
-// terminates fzf_proc
+const SearchError =
+    error{
+        NoProjectsFound,
+        // from killing the process
+        AlreadyTerminated,
+    } ||
+    ExtractError || walk.SearchError || process.Child.SpawnError;
+
+/// searches for project. returned slice may or may not be the buffer passed in.
+/// always terminates the passed-in process
 fn searchProject(
     arena: Allocator,
     fzf_proc: *process.Child,
     roots: []const []const u8,
     project_query: []const u8,
     path_buf: []u8,
-) !?[]const u8 {
+) SearchError!?[]const u8 {
     var buf: [256]u8 = undefined;
     var fzf_bw = fzf_proc.stdin.?.writer(&buf);
     const fzf_stdin = &fzf_bw.interface;
@@ -186,7 +197,7 @@ fn searchProject(
         .writer = fzf_stdin,
         .flush_after = .project,
     }) catch |err| return switch (err) {
-        // select early
+        // most likely failed due to selecting a project before finishing search
         error.WriteFailed => extractProject(fzf_proc, path_buf),
         else => err,
     };
@@ -195,22 +206,29 @@ fn searchProject(
 
     if (projects.len == 0) {
         _ = try fzf_proc.kill();
-        try fs.File.stderr().writeAll("no projects found\n");
-        process.exit(1);
+        return error.NoProjectsFound;
     }
 
     fzf_proc.stdin.?.close();
     fzf_proc.stdin = null;
 
     if (matchProject(project_query, projects)) |matched_path| {
+        // found singular exact project match, abort fzf and return
         _ = try fzf_proc.kill();
+        // TODO: should we fill the path_buf and return it for consistency?
         return matched_path;
     }
 
     return extractProject(fzf_proc, path_buf);
 }
 
-fn extractProject(fzf_proc: *process.Child, buf: []u8) !?[]const u8 {
+const ExtractError = error{
+    FzfNotFound,
+    NonZeroExitCode,
+    BadTermination,
+} || std.Io.Reader.DelimiterError || process.Child.WaitError;
+
+fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 {
     var br = fzf_proc.stdout.?.reader(buf);
     const fzf_reader = &br.interface;
 
@@ -219,12 +237,12 @@ fn extractProject(fzf_proc: *process.Child, buf: []u8) !?[]const u8 {
         else => return err,
     };
 
-    const exit = fzf_proc.wait() catch |err| switch (err) {
+    const term = fzf_proc.wait() catch |err| switch (err) {
         error.FileNotFound => return error.FzfNotFound,
         else => return err,
     };
 
-    return switch (exit) {
+    return switch (term) {
         .Exited => |code| switch (code) {
             0 => path,
             FZF_NO_MATCH_EXIT_CODE, FZF_INTERRUPT_EXIT_CODE => null,
