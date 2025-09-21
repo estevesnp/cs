@@ -3,11 +3,16 @@ const builtin = @import("builtin");
 const options = @import("options");
 const fs = std.fs;
 const process = std.process;
+const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const config = @import("config.zig");
 const cli = @import("cli.zig");
+const walk = @import("walk.zig");
+
+const FZF_NO_MATCH_EXIT_CODE: u8 = 1;
+const FZF_INTERRUPT_EXIT_CODE: u8 = 130;
 
 const USAGE =
     \\usage: cs [project] [flags]
@@ -37,6 +42,11 @@ const USAGE =
     \\  such as creating a new tmux session or changing directory to the project
     \\
 ;
+
+fn exit(msg: []const u8) noreturn {
+    fs.File.stderr().writeAll(msg) catch {};
+    process.exit(1);
+}
 
 pub fn main() !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -126,8 +136,6 @@ fn addPaths(arena: Allocator, paths: []const []const u8) !void {
 }
 
 fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
-    _ = search_opts;
-
     const env_map = try process.getEnvMap(arena);
 
     var cfg_context = try config.openConfig(arena, &env_map);
@@ -136,21 +144,175 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
     const cfg = cfg_context.config;
 
     if (cfg.project_roots.len == 0) {
-        try fs.File.stderr().writeAll("no project roots found. add one using the '--add-paths' flag");
-        process.exit(1);
+        exit("no project roots found. add one using the '--add-paths' flag\n");
     }
 
-    const walk = @import("walk.zig");
+    const preview = search_opts.preview orelse cfg.preview;
 
-    var buf: [2048]u8 = undefined;
-    var stdout_bw = fs.File.stdout().writer(&buf);
-    const stdout = &stdout_bw.interface;
+    var fzf_proc = try spawnFzf(arena, search_opts.project, preview);
 
-    const count = try walk.scanProjects(arena, cfg.project_roots, .{ .writer = stdout });
-    try stdout.print("found {d} projects\n", .{count});
-    try stdout.flush();
+    // +1 for the new line
+    var path_buf: [fs.max_path_bytes + 1]u8 = undefined;
+    const path = searchProject(
+        arena,
+        &fzf_proc,
+        cfg.project_roots,
+        search_opts.project,
+        &path_buf,
+    ) catch |err| switch (err) {
+        error.FzfNotFound => exit("fzf binary not found in path\n"),
+        error.NoProjectsFound => exit("no projects found\n"),
+        else => return err,
+    };
+
+    if (path) |p| {
+        std.debug.print("found {s}\n", .{p});
+    } else {
+        std.debug.print("search aborted\n", .{});
+    }
+}
+
+const SearchError =
+    error{
+        NoProjectsFound,
+        // from killing the process
+        AlreadyTerminated,
+    } ||
+    ExtractError || walk.SearchError || process.Child.SpawnError;
+
+/// searches for project. returned slice may or may not be the buffer passed in.
+/// always terminates the passed-in process
+fn searchProject(
+    arena: Allocator,
+    fzf_proc: *process.Child,
+    roots: []const []const u8,
+    project_query: []const u8,
+    path_buf: []u8,
+) SearchError!?[]const u8 {
+    var buf: [256]u8 = undefined;
+    var fzf_bw = fzf_proc.stdin.?.writer(&buf);
+    const fzf_stdin = &fzf_bw.interface;
+
+    const project_set = walk.searchProjects(arena, roots, .{
+        .writer = fzf_stdin,
+        .flush_after = .project,
+    }) catch |err| return switch (err) {
+        // most likely failed due to selecting a project before finishing search
+        error.WriteFailed => extractProject(fzf_proc, path_buf),
+        else => err,
+    };
+
+    const projects = project_set.keys();
+
+    if (projects.len == 0) {
+        _ = try fzf_proc.kill();
+        return error.NoProjectsFound;
+    }
+
+    fzf_proc.stdin.?.close();
+    fzf_proc.stdin = null;
+
+    if (matchProject(project_query, projects)) |matched_path| {
+        // found singular exact project match, abort fzf and return
+        _ = try fzf_proc.kill();
+        // TODO: should we fill the path_buf and return it for consistency?
+        return matched_path;
+    }
+
+    return extractProject(fzf_proc, path_buf);
+}
+
+const ExtractError = error{
+    FzfNotFound,
+    NonZeroExitCode,
+    BadTermination,
+} || std.Io.Reader.DelimiterError || process.Child.WaitError;
+
+fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 {
+    var br = fzf_proc.stdout.?.reader(buf);
+    const fzf_reader = &br.interface;
+
+    const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
+        error.EndOfStream => null,
+        else => return err,
+    };
+
+    const term = fzf_proc.wait() catch |err| switch (err) {
+        error.FileNotFound => return error.FzfNotFound,
+        else => return err,
+    };
+
+    return switch (term) {
+        .Exited => |code| switch (code) {
+            0 => path,
+            FZF_NO_MATCH_EXIT_CODE, FZF_INTERRUPT_EXIT_CODE => null,
+            else => error.NonZeroExitCode,
+        },
+        else => error.BadTermination,
+    };
+}
+
+fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) process.Child.SpawnError!process.Child {
+    var fzf_proc = std.process.Child.init(&.{
+        "fzf",
+        "--header=choose a repo",
+        "--reverse",
+        "--scheme=path",
+        "--preview-label=[ repository files ]",
+        "--preview",
+        preview,
+        "--query",
+        project,
+    }, gpa);
+
+    fzf_proc.stdin_behavior = .Pipe;
+    fzf_proc.stdout_behavior = .Pipe;
+
+    try fzf_proc.spawn();
+
+    return fzf_proc;
+}
+
+fn matchProject(project: []const u8, project_paths: []const []const u8) ?[]const u8 {
+    if (project.len == 0) return null;
+
+    var match: ?[]const u8 = null;
+
+    for (project_paths) |path| {
+        if (std.mem.endsWith(u8, path, project)) {
+            if (match != null) return null;
+            match = path;
+        }
+    }
+
+    return match;
+}
+
+test matchProject {
+    try testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{
+        "/foo/bar/123",
+        "/foo/bar/abc",
+        "/bar/bar/bar",
+    }).?);
+
+    try testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{"/foo/bar/abc"}).?);
+
+    try testing.expectEqual(null, matchProject("abc", &.{
+        "/foo/bar/123",
+        "/foo/bar/baz",
+        "/bar/bar/bar",
+    }));
+
+    try testing.expectEqual(null, matchProject("abc", &.{
+        "/foo/bar/123",
+        "/foo/bar/abc",
+        "/bar/bar/bar",
+        "/foo/baz/abc",
+    }));
+
+    try testing.expectEqual(null, matchProject("", &.{"/foo/bar/123"}));
 }
 
 test "ref all decls" {
-    std.testing.refAllDeclsRecursive(@This());
+    testing.refAllDeclsRecursive(@This());
 }
