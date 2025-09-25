@@ -14,6 +14,7 @@ const default_fzf_preview = switch (builtin.os.tag) {
     else => "ls {}",
 };
 
+// TODO: do we even want the script?
 pub const Config = struct {
     /// directories to search for projects
     project_roots: []const []const u8 = &.{},

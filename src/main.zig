@@ -4,6 +4,8 @@ const options = @import("options");
 const fs = std.fs;
 const process = std.process;
 const testing = std.testing;
+const Writer = std.Io.Writer;
+const Reader = std.Io.Reader;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
@@ -205,26 +207,33 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
 
     const preview = search_opts.preview orelse cfg.preview;
 
-    var fzf_proc = try spawnFzf(arena, search_opts.project, preview);
-
     // +1 for the new line
     var path_buf: [fs.max_path_bytes + 1]u8 = undefined;
     const path = searchProject(
         arena,
-        &fzf_proc,
         cfg.project_roots,
         search_opts.project,
+        preview,
         &path_buf,
     ) catch |err| switch (err) {
         error.FzfNotFound => exit("fzf binary not found in path\n"),
         error.NoProjectsFound => exit("no projects found\n"),
         else => return err,
-    };
+    } orelse return;
 
-    if (path) |p| {
-        std.debug.print("found {s}\n", .{p});
-    } else {
-        std.debug.print("search aborted\n", .{});
+    const action = search_opts.action orelse cfg.action;
+    switch (action) {
+        .print => try fs.File.stdout().writeAll(path),
+
+        inline else => |a| handleTmux(
+            arena,
+            &env_map,
+            @field(TmuxAction, @tagName(a)),
+            path,
+        ) catch |err| switch (err) {
+            error.TmuxNotFound => exit("tmux binary not found in path\n"),
+            else => return err,
+        },
     }
 }
 
@@ -237,14 +246,16 @@ const SearchError =
     ExtractError || walk.SearchError || process.Child.SpawnError;
 
 /// searches for project. returned slice may or may not be the buffer passed in.
-/// always terminates the passed-in process
 fn searchProject(
     arena: Allocator,
-    fzf_proc: *process.Child,
     roots: []const []const u8,
     project_query: []const u8,
+    preview: []const u8,
     path_buf: []u8,
 ) SearchError!?[]const u8 {
+    var fzf_proc = try spawnFzf(arena, project_query, preview);
+    errdefer _ = fzf_proc.kill() catch {};
+
     var buf: [256]u8 = undefined;
     var fzf_bw = fzf_proc.stdin.?.writer(&buf);
     const fzf_stdin = &fzf_bw.interface;
@@ -252,10 +263,10 @@ fn searchProject(
     const project_set = walk.searchProjects(arena, roots, .{
         .writer = fzf_stdin,
         .flush_after = .project,
-    }) catch |err| return switch (err) {
+    }) catch |err| switch (err) {
         // most likely failed due to selecting a project before finishing search
-        error.WriteFailed => extractProject(fzf_proc, path_buf),
-        else => err,
+        error.WriteFailed => return extractProject(&fzf_proc, path_buf),
+        else => return err,
     };
 
     const projects = project_set.keys();
@@ -275,14 +286,14 @@ fn searchProject(
         return matched_path;
     }
 
-    return extractProject(fzf_proc, path_buf);
+    return extractProject(&fzf_proc, path_buf);
 }
 
 const ExtractError = error{
     FzfNotFound,
-    NonZeroExitCode,
-    BadTermination,
-} || std.Io.Reader.DelimiterError || process.Child.WaitError;
+    FzfNonZeroExitCode,
+    FzfBadTermination,
+} || Reader.DelimiterError || process.Child.WaitError;
 
 fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 {
     var br = fzf_proc.stdout.?.reader(buf);
@@ -302,9 +313,9 @@ fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 
         .Exited => |code| switch (code) {
             0 => path,
             FZF_NO_MATCH_EXIT_CODE, FZF_INTERRUPT_EXIT_CODE => null,
-            else => error.NonZeroExitCode,
+            else => error.FzfNonZeroExitCode,
         },
-        else => error.BadTermination,
+        else => error.FzfBadTermination,
     };
 }
 
@@ -371,4 +382,189 @@ test matchProject {
 
 test "ref all decls" {
     testing.refAllDeclsRecursive(@This());
+}
+
+const TmuxAction = enum { session, window };
+
+fn handleTmux(
+    arena: Allocator,
+    env_map: *const process.EnvMap,
+    action: TmuxAction,
+    project_path: []const u8,
+) !void {
+    var basename_buf: [256]u8 = undefined;
+    const session_name = normalizeBasename(fs.path.basename(project_path), &basename_buf);
+
+    switch (action) {
+        .session => try handleTmuxSession(
+            arena,
+            env_map,
+            project_path,
+            session_name,
+        ),
+        .window => try handleTmuxWindow(
+            arena,
+            env_map,
+            project_path,
+            session_name,
+        ),
+    }
+}
+
+// TODO: change return type to just the error set
+fn handleTmuxSession(
+    arena: Allocator,
+    env_map: *const process.EnvMap,
+    project_path: []const u8,
+    session_name: []const u8,
+) !noreturn {
+    var tmux_proc = try spawnTmuxControlMode(arena);
+    errdefer _ = tmux_proc.kill() catch {};
+
+    var stdin_buf: [256]u8 = undefined;
+    var tmux_stdin_bw = tmux_proc.stdin.?.writer(&stdin_buf);
+    const tmux_writer = &tmux_stdin_bw.interface;
+
+    var stdout_buf: [1024]u8 = undefined;
+    var tmux_stdout_br = tmux_proc.stdout.?.reader(&stdout_buf);
+    const tmux_reader = &tmux_stdout_br.interface;
+
+    createSession(tmux_writer, tmux_reader, project_path, session_name) catch |err| switch (err) {
+        // TODO: propper handling. do a process.wait?
+        error.TmuxReadError => return error.TmuxNotFound,
+        else => return err,
+    };
+
+    const term = tmux_proc.wait() catch |err| switch (err) {
+        // TODO: should we assert this error doesn't happen ever?
+        error.FileNotFound => return error.TmuxNotFound,
+        else => return err,
+    };
+
+    switch (term) {
+        .Exited => |code| switch (code) {
+            0 => {},
+            else => return error.TmuxNonZeroExitCode,
+        },
+        else => return error.TmuxBadTermination,
+    }
+
+    const session_command = if (isInsideTmuxSession(env_map)) "switch-client" else "attach-session";
+    const args = &.{ "tmux", session_command, "-t", session_name };
+
+    const err = process.execve(arena, args, env_map);
+    return switch (err) {
+        // TODO: should we assert this error doesn't happen ever?
+        error.FileNotFound => error.TmuxNotFound,
+        else => err,
+    };
+}
+
+fn createSession(
+    tmux_stdin: *Writer,
+    tmux_stdout: *Reader,
+    project_path: []const u8,
+    session_name: []const u8,
+) !void {
+    const session_exists = try sessionExists(tmux_stdin, tmux_stdout, session_name);
+    if (!session_exists) {
+        try tmux_stdin.print(
+            \\new-session -s '{s}' -c '{s}'
+            \\switch-client -l
+            \\
+        , .{ session_name, project_path });
+    }
+
+    try tmux_stdin.writeAll("kill-session\n\n");
+    try tmux_stdin.flush();
+}
+
+// TODO: add error set
+fn sessionExists(tmux_stdin: *Writer, tmux_stdout: *Reader, session_name: []const u8) !bool {
+    try tmux_stdin.writeAll("list-sessions -F '#{session_name}'\n");
+    try tmux_stdin.flush();
+
+    var reading_lines = false;
+    while (true) {
+        const line = tmux_stdout.takeDelimiterExclusive('\n') catch |err| switch (err) {
+            error.EndOfStream => return error.TmuxReadError,
+            else => return err,
+        };
+
+        if (line.len == 0) continue;
+        if (line[0] == '%') {
+            if (reading_lines) return false;
+            continue;
+        }
+
+        reading_lines = true;
+        if (std.mem.eql(u8, line, session_name)) {
+            return true;
+        }
+    }
+}
+
+// TODO: change return type to just error set
+fn handleTmuxWindow(
+    arena: Allocator,
+    env_map: *const process.EnvMap,
+    project_path: []const u8,
+    session_name: []const u8,
+) !void {
+    if (!isInsideTmuxSession(env_map)) {
+        try handleTmuxSession(arena, env_map, project_path, session_name);
+    }
+
+    const args = &.{ "tmux", "new-window", "-c", project_path, "-n", session_name };
+
+    const err = process.execve(arena, args, env_map);
+    return switch (err) {
+        error.FileNotFound => error.TmuxNotFound,
+        else => err,
+    };
+}
+
+fn isInsideTmuxSession(env_map: *const process.EnvMap) bool {
+    return env_map.get("TMUX") != null;
+}
+
+fn normalizeBasename(basename: []const u8, buf: []u8) []u8 {
+    assert(buf.len >= basename.len);
+
+    const trimmed = std.mem.trim(u8, basename, ".");
+    const normalized = buf[0..trimmed.len];
+
+    for (trimmed, 0..) |char, idx| {
+        normalized[idx] = if (char == '.') '_' else char;
+    }
+
+    return normalized;
+}
+
+test normalizeBasename {
+    try testNormalizeBasename("..foo.bar..", "foo_bar");
+    try testNormalizeBasename("foo.bar..", "foo_bar");
+    try testNormalizeBasename("..foo.bar", "foo_bar");
+    try testNormalizeBasename("..foobar..", "foobar");
+    try testNormalizeBasename("foobar", "foobar");
+}
+
+fn testNormalizeBasename(input: []const u8, expected: []const u8) !void {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(expected, normalizeBasename(input, &buf));
+}
+
+fn spawnTmuxControlMode(gpa: Allocator) process.Child.SpawnError!process.Child {
+    var tmux_proc = std.process.Child.init(&.{
+        "tmux",
+        "-C",
+        "new-session",
+    }, gpa);
+
+    tmux_proc.stdin_behavior = .Pipe;
+    tmux_proc.stdout_behavior = .Pipe;
+
+    try tmux_proc.spawn();
+
+    return tmux_proc;
 }
