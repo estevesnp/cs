@@ -4,6 +4,7 @@ const options = @import("options");
 const fs = std.fs;
 const process = std.process;
 const testing = std.testing;
+const File = std.fs.File;
 const Writer = std.Io.Writer;
 const Reader = std.Io.Reader;
 const Allocator = std.mem.Allocator;
@@ -48,7 +49,7 @@ const USAGE =
 ;
 
 fn exit(msg: []const u8) noreturn {
-    fs.File.stderr().writeAll(msg) catch {};
+    File.stderr().writeAll(msg) catch {};
     process.exit(1);
 }
 
@@ -69,7 +70,7 @@ pub fn main() !void {
     const arena = arena_state.allocator();
 
     var stderr_buf: [1024]u8 = undefined;
-    var stderr = fs.File.stderr().writer(&stderr_buf);
+    var stderr = File.stderr().writer(&stderr_buf);
 
     const diag: cli.Diagnostic = .{ .writer = &stderr.interface };
 
@@ -88,24 +89,24 @@ pub fn main() !void {
     }
 }
 
-fn help() !void {
-    try fs.File.stdout().writeAll(USAGE);
+fn help() File.WriteError!void {
+    try File.stdout().writeAll(USAGE);
 }
 
-fn version() !void {
+fn version() Writer.Error!void {
     var buf: [100]u8 = undefined;
-    var stdout_writer = fs.File.stdout().writer(&buf);
+    var stdout_writer = File.stdout().writer(&buf);
     const stdout = &stdout_writer.interface;
 
     try stdout.print("{f}\n", .{options.cs_version});
     try stdout.flush();
 }
 
-fn env() !void {
-    try fs.File.stdout().writeAll("env\n");
+fn env() File.WriteError!void {
+    try File.stdout().writeAll("env\n");
 }
 
-fn updateConfig(cfg_file: fs.File, cfg: config.Config) !void {
+fn updateConfig(cfg_file: File, cfg: config.Config) !void {
     try cfg_file.setEndPos(0);
     try cfg_file.seekTo(0);
 
@@ -224,16 +225,19 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
 
     const action = search_opts.action orelse cfg.action;
     switch (action) {
-        .print => try fs.File.stdout().writeAll(path),
+        .print => try File.stdout().writeAll(path),
 
-        inline else => |a| handleTmux(
-            arena,
-            &env_map,
-            @field(TmuxAction, @tagName(a)),
-            path,
-        ) catch |err| switch (err) {
-            error.TmuxNotFound => exit("tmux binary not found in path\n"),
-            else => return err,
+        inline else => |a| {
+            const err = handleTmux(
+                arena,
+                &env_map,
+                @field(TmuxAction, @tagName(a)),
+                path,
+            );
+            switch (err) {
+                error.TmuxNotFound => exit("tmux binary not found in path\n"),
+                else => return err,
+            }
         },
     }
 }
@@ -392,18 +396,18 @@ fn handleTmux(
     env_map: *const process.EnvMap,
     action: TmuxAction,
     project_path: []const u8,
-) !void {
+) TmuxSessionError {
     var basename_buf: [256]u8 = undefined;
     const session_name = normalizeBasename(fs.path.basename(project_path), &basename_buf);
 
     switch (action) {
-        .session => try handleTmuxSession(
+        .session => return handleTmuxSession(
             arena,
             env_map,
             project_path,
             session_name,
         ),
-        .window => try handleTmuxWindow(
+        .window => return handleTmuxWindow(
             arena,
             env_map,
             project_path,
@@ -412,13 +416,38 @@ fn handleTmux(
     }
 }
 
-// TODO: change return type to just the error set
+fn spawnTmuxControlMode(gpa: Allocator) process.Child.SpawnError!process.Child {
+    var tmux_proc = std.process.Child.init(&.{
+        "tmux",
+        "-C",
+        "new-session",
+    }, gpa);
+
+    tmux_proc.stdin_behavior = .Pipe;
+    tmux_proc.stdout_behavior = .Pipe;
+
+    try tmux_proc.spawn();
+
+    return tmux_proc;
+}
+
+const TmuxSessionError = error{
+    TmuxNotFound,
+    TmuxNonZeroExitCode,
+    TmuxBadTermination,
+    // TODO: check issues / if there is a fix
+    // already handled, but needed to make the compiler happy
+    TmuxReadError,
+} || process.Child.SpawnError || Writer.Error || Reader.DelimiterError;
+
+/// creates a new session called `session_name` if one doesn't already exist.
+/// then attaches to that session.
 fn handleTmuxSession(
     arena: Allocator,
     env_map: *const process.EnvMap,
     project_path: []const u8,
     session_name: []const u8,
-) !noreturn {
+) TmuxSessionError {
     var tmux_proc = try spawnTmuxControlMode(arena);
     errdefer _ = tmux_proc.kill() catch {};
 
@@ -431,13 +460,11 @@ fn handleTmuxSession(
     const tmux_reader = &tmux_stdout_br.interface;
 
     createSession(tmux_writer, tmux_reader, project_path, session_name) catch |err| switch (err) {
-        // TODO: propper handling. do a process.wait?
         error.TmuxReadError => return error.TmuxNotFound,
         else => return err,
     };
 
     const term = tmux_proc.wait() catch |err| switch (err) {
-        // TODO: should we assert this error doesn't happen ever?
         error.FileNotFound => return error.TmuxNotFound,
         else => return err,
     };
@@ -455,18 +482,19 @@ fn handleTmuxSession(
 
     const err = process.execve(arena, args, env_map);
     return switch (err) {
-        // TODO: should we assert this error doesn't happen ever?
         error.FileNotFound => error.TmuxNotFound,
         else => err,
     };
 }
+
+const TmuxWriteReadError = error{TmuxReadError} || Writer.Error || Reader.DelimiterError;
 
 fn createSession(
     tmux_stdin: *Writer,
     tmux_stdout: *Reader,
     project_path: []const u8,
     session_name: []const u8,
-) !void {
+) TmuxWriteReadError!void {
     const session_exists = try sessionExists(tmux_stdin, tmux_stdout, session_name);
     if (!session_exists) {
         try tmux_stdin.print(
@@ -480,8 +508,11 @@ fn createSession(
     try tmux_stdin.flush();
 }
 
-// TODO: add error set
-fn sessionExists(tmux_stdin: *Writer, tmux_stdout: *Reader, session_name: []const u8) !bool {
+fn sessionExists(
+    tmux_stdin: *Writer,
+    tmux_stdout: *Reader,
+    session_name: []const u8,
+) TmuxWriteReadError!bool {
     try tmux_stdin.writeAll("list-sessions -F '#{session_name}'\n");
     try tmux_stdin.flush();
 
@@ -505,15 +536,16 @@ fn sessionExists(tmux_stdin: *Writer, tmux_stdout: *Reader, session_name: []cons
     }
 }
 
-// TODO: change return type to just error set
+/// if inside a session, creates a new window called `session_name`.
+/// if not, just calls `handleTmuxSession`, creating a new session
 fn handleTmuxWindow(
     arena: Allocator,
     env_map: *const process.EnvMap,
     project_path: []const u8,
     session_name: []const u8,
-) !void {
+) TmuxSessionError {
     if (!isInsideTmuxSession(env_map)) {
-        try handleTmuxSession(arena, env_map, project_path, session_name);
+        return handleTmuxSession(arena, env_map, project_path, session_name);
     }
 
     const args = &.{ "tmux", "new-window", "-c", project_path, "-n", session_name };
@@ -553,19 +585,4 @@ test normalizeBasename {
 fn testNormalizeBasename(input: []const u8, expected: []const u8) !void {
     var buf: [256]u8 = undefined;
     try std.testing.expectEqualStrings(expected, normalizeBasename(input, &buf));
-}
-
-fn spawnTmuxControlMode(gpa: Allocator) process.Child.SpawnError!process.Child {
-    var tmux_proc = std.process.Child.init(&.{
-        "tmux",
-        "-C",
-        "new-session",
-    }, gpa);
-
-    tmux_proc.stdin_behavior = .Pipe;
-    tmux_proc.stdout_behavior = .Pipe;
-
-    try tmux_proc.spawn();
-
-    return tmux_proc;
 }
