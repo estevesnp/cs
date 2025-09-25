@@ -182,9 +182,10 @@ fn removePaths(arena: Allocator, paths: []const []const u8) !void {
     defer path_set.deinit(arena);
 
     const cwd = fs.cwd();
+    var path_buf: [fs.max_path_bytes]u8 = undefined;
     for (paths) |path| {
         if (path.len == 0) continue;
-        const real_path = try cwd.realpathAlloc(arena, path);
+        const real_path = try cwd.realpath(path, &path_buf);
         _ = path_set.swapRemove(real_path);
     }
 
