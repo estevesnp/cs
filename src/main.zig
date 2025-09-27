@@ -435,9 +435,6 @@ const TmuxSessionError = error{
     TmuxNotFound,
     TmuxNonZeroExitCode,
     TmuxBadTermination,
-    // TODO: check issues / if there is a fix
-    // already handled, but needed to make the compiler happy
-    TmuxReadError,
 } || process.Child.SpawnError || Writer.Error || Reader.DelimiterError;
 
 /// creates a new session called `session_name` if one doesn't already exist.
@@ -461,7 +458,9 @@ fn handleTmuxSession(
 
     createSession(tmux_writer, tmux_reader, project_path, session_name) catch |err| switch (err) {
         error.TmuxReadError => return error.TmuxNotFound,
-        else => return err,
+        // inline else should work here, but due to limitations in error resolutions
+        // it is needed to explicitly list the possible errors.
+        error.EndOfStream, error.ReadFailed, error.StreamTooLong, error.WriteFailed => |e| return e,
     };
 
     const term = tmux_proc.wait() catch |err| switch (err) {
