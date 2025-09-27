@@ -10,7 +10,7 @@ pub const Command = union(enum) {
     help,
     /// print version
     version,
-    // TODO: do we want config location only? do we print the config as well?
+    // TODO: implement
     env,
     @"add-paths": []const []const u8,
     @"set-paths": []const []const u8,

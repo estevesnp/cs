@@ -14,6 +14,7 @@ const default_fzf_preview = switch (builtin.os.tag) {
     else => "ls {}",
 };
 
+// TODO: do we even want the script?
 pub const Config = struct {
     /// directories to search for projects
     project_roots: []const []const u8 = &.{},
@@ -83,7 +84,6 @@ fn getConfigContext(arena: Allocator, config_path: []const u8) !ConfigContext {
     };
 }
 
-// TODO: check fs.getAppDataDir
 fn getConfigPath(path_buf: []u8, env_map: *const process.EnvMap) ![]u8 {
     switch (builtin.os.tag) {
         .windows => return try joinPaths(path_buf, &.{ env_map.get("APPDATA").?, "cs" }),
