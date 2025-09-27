@@ -242,12 +242,7 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
     }
 }
 
-const SearchError =
-    error{
-        NoProjectsFound,
-        // from killing the process
-        AlreadyTerminated,
-    } ||
+const SearchError = error{NoProjectsFound} ||
     ExtractError || walk.SearchError || process.Child.SpawnError;
 
 /// searches for project. returned slice may or may not be the buffer passed in.
@@ -277,7 +272,7 @@ fn searchProject(
     const projects = project_set.keys();
 
     if (projects.len == 0) {
-        _ = try fzf_proc.kill();
+        _ = fzf_proc.kill() catch {};
         return error.NoProjectsFound;
     }
 
@@ -286,7 +281,7 @@ fn searchProject(
 
     if (matchProject(project_query, projects)) |matched_path| {
         // found singular exact project match, abort fzf and return
-        _ = try fzf_proc.kill();
+        _ = fzf_proc.kill() catch {};
         // TODO: should we fill the path_buf and return it for consistency?
         return matched_path;
     }
