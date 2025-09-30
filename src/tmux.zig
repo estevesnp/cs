@@ -191,14 +191,14 @@ fn normalizeBasename(basename: []const u8, buf: []u8) []u8 {
 }
 
 test normalizeBasename {
-    try testNormalizeBasename("..foo.bar..", "foo_bar");
-    try testNormalizeBasename("foo.bar..", "foo_bar");
-    try testNormalizeBasename("..foo.bar", "foo_bar");
-    try testNormalizeBasename("..foobar..", "foobar");
-    try testNormalizeBasename("foobar", "foobar");
+    try test_normalizeBasename("..foo.bar..", "foo_bar");
+    try test_normalizeBasename("foo.bar..", "foo_bar");
+    try test_normalizeBasename("..foo.bar", "foo_bar");
+    try test_normalizeBasename("..foobar..", "foobar");
+    try test_normalizeBasename("foobar", "foobar");
 }
 
-fn testNormalizeBasename(input: []const u8, expected: []const u8) !void {
+fn test_normalizeBasename(input: []const u8, expected: []const u8) !void {
     var buf: [256]u8 = undefined;
     try std.testing.expectEqualStrings(expected, normalizeBasename(input, &buf));
 }

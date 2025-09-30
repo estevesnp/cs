@@ -297,7 +297,7 @@ test ArgIterator {
     }
 }
 
-fn testFailure(args: []const []const u8, comptime expected_message: []const u8, expected_error: ArgParseError) !void {
+fn test_failure(args: []const []const u8, comptime expected_message: []const u8, expected_error: ArgParseError) !void {
     var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
@@ -323,13 +323,13 @@ test "parse --help correctly" {
 test "correctly fails bad --help usage" {
     const help_flags: []const []const u8 = &.{ "--help", "-h" };
     for (help_flags) |flag| {
-        try testFailure(
+        try test_failure(
             &.{ "cs", "my-project", flag },
             "error parsing help flag: expected to be the first flag, was number 2\n",
             error.IllegalArgument,
         );
 
-        try testFailure(
+        try test_failure(
             &.{ "cs", flag, "my-project" },
             "error parsing help flag: expected to be the last argument, found: my-project\n",
             error.IllegalArgument,
@@ -353,13 +353,13 @@ test "parse --version correctly" {
 test "correctly fails bad --version usage" {
     const version_flags: []const []const u8 = &.{ "--version", "-v", "-V" };
     for (version_flags) |flag| {
-        try testFailure(
+        try test_failure(
             &.{ "cs", "my-project", flag },
             "error parsing version flag: expected to be the first flag, was number 2\n",
             error.IllegalArgument,
         );
 
-        try testFailure(
+        try test_failure(
             &.{ "cs", flag, "my-project" },
             "error parsing version flag: expected to be the last argument, found: my-project\n",
             error.IllegalArgument,
@@ -378,20 +378,20 @@ test "parse --env correctly" {
 }
 
 test "correctly fails bad --env usage" {
-    try testFailure(
+    try test_failure(
         &.{ "cs", "my-project", "--env" },
         "error parsing env flag: expected to be the first flag, was number 2\n",
         error.IllegalArgument,
     );
 
-    try testFailure(
+    try test_failure(
         &.{ "cs", "--env", "my-project" },
         "error parsing env flag: expected to be the last argument, found: my-project\n",
         error.IllegalArgument,
     );
 }
 
-fn testPaths(
+fn test_paths(
     comptime tag: PathFlagSet.PathTag,
     args: []const []const u8,
     expected_paths: []const []const u8,
@@ -429,9 +429,9 @@ test "parse path flags correctly" {
     inline for (PathFlagSet.values) |flag_set| {
         const tag = flag_set.tag;
         for (flag_set.flags) |flag| {
-            try testPaths(tag, &.{ "cs", flag, "a/b/c", "../../tmp" }, &.{ "a/b/c", "../../tmp" });
-            try testPaths(tag, &.{ "cs", flag, "." }, &.{"."});
-            try testPaths(tag, &.{ "cs", flag, "..", "../..", "../../.." }, &.{ "..", "../..", "../../.." });
+            try test_paths(tag, &.{ "cs", flag, "a/b/c", "../../tmp" }, &.{ "a/b/c", "../../tmp" });
+            try test_paths(tag, &.{ "cs", flag, "." }, &.{"."});
+            try test_paths(tag, &.{ "cs", flag, "..", "../..", "../../.." }, &.{ "..", "../..", "../../.." });
         }
     }
 }
@@ -440,31 +440,31 @@ test "correctly fails bad --add-paths usage" {
     inline for (PathFlagSet.values) |flag_set| {
         const flag_name = @tagName(flag_set.tag);
         for (flag_set.flags) |flag| {
-            try testFailure(
+            try test_failure(
                 &.{ "cs", "my-project", flag, "a/b/c" },
                 "error parsing " ++ flag_name ++ " flag: expected to be the first flag, was number 2\n",
                 error.IllegalArgument,
             );
 
-            try testFailure(
+            try test_failure(
                 &.{ "cs", flag },
                 "error parsing " ++ flag_name ++ " flag: no path provided\n",
                 error.MissingArgument,
             );
 
-            try testFailure(
+            try test_failure(
                 &.{ "cs", flag, "a/b/c", "--action", "print" },
                 "error parsing " ++ flag_name ++ " flag: illegal path: --action\n",
                 error.IllegalArgument,
             );
 
-            try testFailure(
+            try test_failure(
                 &.{ "cs", flag, "--help" },
                 "error parsing " ++ flag_name ++ " flag: illegal path: --help\n",
                 error.IllegalArgument,
             );
 
-            try testFailure(
+            try test_failure(
                 &.{ "cs", flag, "" },
                 "error parsing " ++ flag_name ++ " flag: empty path\n",
                 error.IllegalArgument,
@@ -474,20 +474,20 @@ test "correctly fails bad --add-paths usage" {
 }
 
 test "correctly fails bad flag" {
-    try testFailure(
+    try test_failure(
         &.{ "cs", "--config" },
         "illegal flag: --config\n",
         error.IllegalArgument,
     );
 
-    try testFailure(
+    try test_failure(
         &.{ "cs", "my_repo", "--verbose" },
         "illegal flag: --verbose\n",
         error.IllegalArgument,
     );
 }
 
-fn testSearchCommand(args: []const []const u8, expected_search_opts: SearchOpts) !void {
+fn test_searchCommand(args: []const []const u8, expected_search_opts: SearchOpts) !void {
     var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
@@ -516,25 +516,25 @@ fn testSearchCommand(args: []const []const u8, expected_search_opts: SearchOpts)
 
 test "parse search command correctly" {
     { // project
-        try testSearchCommand(&.{"cs"}, .{
+        try test_searchCommand(&.{"cs"}, .{
             .project = "",
             .preview = null,
             .script = null,
             .action = null,
         });
-        try testSearchCommand(&.{ "cs", "my-project" }, .{
+        try test_searchCommand(&.{ "cs", "my-project" }, .{
             .project = "my-project",
             .preview = null,
             .script = null,
             .action = null,
         });
-        try testSearchCommand(&.{ "cs", "my-project", "other-project" }, .{
+        try test_searchCommand(&.{ "cs", "my-project", "other-project" }, .{
             .project = "other-project",
             .preview = null,
             .script = null,
             .action = null,
         });
-        try testSearchCommand(&.{ "cs", "my-project", "" }, .{
+        try test_searchCommand(&.{ "cs", "my-project", "" }, .{
             .project = "",
             .preview = null,
             .script = null,
@@ -542,37 +542,37 @@ test "parse search command correctly" {
         });
     }
     { // preview
-        try testSearchCommand(&.{ "cs", "--preview", "bat {}" }, .{
+        try test_searchCommand(&.{ "cs", "--preview", "bat {}" }, .{
             .project = "",
             .preview = "bat {}",
             .script = null,
             .action = null,
         });
-        try testSearchCommand(&.{ "cs", "--preview", "" }, .{
-            .project = "",
-            .preview = "",
-            .script = null,
-            .action = null,
-        });
-        try testSearchCommand(&.{ "cs", "--preview", "bat {}", "--no-preview" }, .{
+        try test_searchCommand(&.{ "cs", "--preview", "" }, .{
             .project = "",
             .preview = "",
             .script = null,
             .action = null,
         });
-        try testSearchCommand(&.{ "cs", "proj", "--preview", "bat {}" }, .{
+        try test_searchCommand(&.{ "cs", "--preview", "bat {}", "--no-preview" }, .{
+            .project = "",
+            .preview = "",
+            .script = null,
+            .action = null,
+        });
+        try test_searchCommand(&.{ "cs", "proj", "--preview", "bat {}" }, .{
             .project = "proj",
             .preview = "bat {}",
             .script = null,
             .action = null,
         });
-        try testSearchCommand(&.{ "cs", "--preview", "bat {}", "proj" }, .{
+        try test_searchCommand(&.{ "cs", "--preview", "bat {}", "proj" }, .{
             .project = "proj",
             .preview = "bat {}",
             .script = null,
             .action = null,
         });
-        try testSearchCommand(&.{ "cs", "one", "--preview", "bat {}", "two" }, .{
+        try test_searchCommand(&.{ "cs", "one", "--preview", "bat {}", "two" }, .{
             .project = "two",
             .preview = "bat {}",
             .script = null,
@@ -580,33 +580,33 @@ test "parse search command correctly" {
         });
     }
     { // script
-        try testSearchCommand(&.{ "cs", "--script", "echo hi" }, .{
+        try test_searchCommand(&.{ "cs", "--script", "echo hi" }, .{
             .project = "",
             .preview = null,
             .script = "echo hi",
             .action = null,
         });
-        try testSearchCommand(&.{ "cs", "--script", "" }, .{
+        try test_searchCommand(&.{ "cs", "--script", "" }, .{
             .project = "",
             .preview = null,
             .script = "",
             .action = null,
         });
 
-        try testSearchCommand(&.{ "cs", "--script", "echo hi", "--script", "echo bye" }, .{
+        try test_searchCommand(&.{ "cs", "--script", "echo hi", "--script", "echo bye" }, .{
             .project = "",
             .preview = null,
             .script = "echo bye",
             .action = null,
         });
-        try testSearchCommand(&.{ "cs", "proj", "--script", "echo hi" }, .{
+        try test_searchCommand(&.{ "cs", "proj", "--script", "echo hi" }, .{
             .project = "proj",
             .preview = null,
             .script = "echo hi",
             .action = null,
         });
 
-        try testSearchCommand(&.{ "cs", "--script", "echo hi", "proj" }, .{
+        try test_searchCommand(&.{ "cs", "--script", "echo hi", "proj" }, .{
             .project = "proj",
             .preview = null,
             .script = "echo hi",
@@ -614,25 +614,25 @@ test "parse search command correctly" {
         });
     }
     { // action
-        try testSearchCommand(&.{ "cs", "--action", "print" }, .{
+        try test_searchCommand(&.{ "cs", "--action", "print" }, .{
             .project = "",
             .preview = null,
             .script = null,
             .action = .print,
         });
-        try testSearchCommand(&.{ "cs", "--print" }, .{
+        try test_searchCommand(&.{ "cs", "--print" }, .{
             .project = "",
             .preview = null,
             .script = null,
             .action = .print,
         });
-        try testSearchCommand(&.{ "cs", "--action", "print", "--window" }, .{
+        try test_searchCommand(&.{ "cs", "--action", "print", "--window" }, .{
             .project = "",
             .preview = null,
             .script = null,
             .action = .window,
         });
-        try testSearchCommand(&.{ "cs", "--print", "proj", "--session" }, .{
+        try test_searchCommand(&.{ "cs", "--print", "proj", "--session" }, .{
             .project = "proj",
             .preview = null,
             .script = null,
@@ -640,13 +640,13 @@ test "parse search command correctly" {
         });
     }
     { // mix
-        try testSearchCommand(&.{ "cs", "proj", "--preview", "bat {}", "--script", "echo hi", "--action", "print" }, .{
+        try test_searchCommand(&.{ "cs", "proj", "--preview", "bat {}", "--script", "echo hi", "--action", "print" }, .{
             .project = "proj",
             .preview = "bat {}",
             .script = "echo hi",
             .action = .print,
         });
-        try testSearchCommand(&.{ "cs", "--session", "--preview", "bat {}", "proj" }, .{
+        try test_searchCommand(&.{ "cs", "--session", "--preview", "bat {}", "proj" }, .{
             .project = "proj",
             .preview = "bat {}",
             .script = null,
@@ -657,12 +657,12 @@ test "parse search command correctly" {
 
 test "correctly fails bad search command" {
     { // preview
-        try testFailure(
+        try test_failure(
             &.{ "cs", "--preview" },
             "error parsing preview flag: expected argument, none found\n",
             error.MissingArgument,
         );
-        try testFailure(
+        try test_failure(
             &.{ "cs", "--preview", "--help" },
             "error parsing preview flag: illegal argument, not expecting flag: --help\n",
             error.IllegalArgument,
@@ -670,12 +670,12 @@ test "correctly fails bad search command" {
     }
 
     { // script
-        try testFailure(
+        try test_failure(
             &.{ "cs", "--script" },
             "error parsing script flag: expected argument, none found\n",
             error.MissingArgument,
         );
-        try testFailure(
+        try test_failure(
             &.{ "cs", "--script", "--help" },
             "error parsing script flag: illegal argument, not expecting flag: --help\n",
             error.IllegalArgument,
@@ -683,12 +683,12 @@ test "correctly fails bad search command" {
     }
 
     { // action
-        try testFailure(
+        try test_failure(
             &.{ "cs", "--action" },
             "error parsing action flag: expected argument, none found\n",
             error.MissingArgument,
         );
-        try testFailure(
+        try test_failure(
             &.{ "cs", "--action", "exec" },
             "error parsing action flag: illegal action: exec\n",
             error.IllegalArgument,
