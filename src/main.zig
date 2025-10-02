@@ -197,6 +197,8 @@ fn removePaths(arena: Allocator, paths: []const []const u8) !void {
 }
 
 fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
+    // TODO: conside removing fetching the whole map. only reason to leave it
+    // is for compatibility with windows, but if it can't run tmux, what's the point
     const env_map = try process.getEnvMap(arena);
 
     var cfg_context = try config.openConfig(arena, &env_map);
