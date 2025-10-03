@@ -4,12 +4,16 @@ const options = @import("options");
 const fs = std.fs;
 const process = std.process;
 const testing = std.testing;
+const File = std.fs.File;
+const Writer = std.Io.Writer;
+const Reader = std.Io.Reader;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const config = @import("config.zig");
 const cli = @import("cli.zig");
 const walk = @import("walk.zig");
+const tmux = @import("tmux.zig");
 
 const FZF_NO_MATCH_EXIT_CODE: u8 = 1;
 const FZF_INTERRUPT_EXIT_CODE: u8 = 130;
@@ -32,7 +36,6 @@ const USAGE =
     \\  -r, --remove-paths <path> [...]  update config removing search paths
     \\  --no-preview                     disables fzf preview
     \\  --preview <str>                  preview command to pass to fzf
-    \\  --script  <str>                  script to run on new tmux session
     \\  --action  <action>               action to execute after finding repository.
     \\                                     options: session, window, print
     \\                                     can call the action directly, e.g. --print
@@ -46,7 +49,7 @@ const USAGE =
 ;
 
 fn exit(msg: []const u8) noreturn {
-    fs.File.stderr().writeAll(msg) catch {};
+    File.stderr().writeAll(msg) catch {};
     process.exit(1);
 }
 
@@ -67,7 +70,7 @@ pub fn main() !void {
     const arena = arena_state.allocator();
 
     var stderr_buf: [1024]u8 = undefined;
-    var stderr = fs.File.stderr().writer(&stderr_buf);
+    var stderr = File.stderr().writer(&stderr_buf);
 
     const diag: cli.Diagnostic = .{ .writer = &stderr.interface };
 
@@ -86,42 +89,27 @@ pub fn main() !void {
     }
 }
 
-fn help() !void {
-    try fs.File.stdout().writeAll(USAGE);
+fn help() File.WriteError!void {
+    try File.stdout().writeAll(USAGE);
 }
 
-fn version() !void {
+fn version() Writer.Error!void {
     var buf: [100]u8 = undefined;
-    var stdout_writer = fs.File.stdout().writer(&buf);
+    var stdout_writer = File.stdout().writer(&buf);
     const stdout = &stdout_writer.interface;
 
     try stdout.print("{f}\n", .{options.cs_version});
     try stdout.flush();
 }
 
-fn env() !void {
-    try fs.File.stdout().writeAll("env\n");
-}
-
-fn updateConfig(cfg_file: fs.File, cfg: config.Config) !void {
-    try cfg_file.setEndPos(0);
-    try cfg_file.seekTo(0);
-
-    var buf: [1024]u8 = undefined;
-    var file_bw = cfg_file.writer(&buf);
-
-    const file_writer = &file_bw.interface;
-
-    try std.json.Stringify.value(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, file_writer);
-    try file_writer.flush();
+fn env() File.WriteError!void {
+    try File.stdout().writeAll("env\n");
 }
 
 fn addPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    const env_map = try process.getEnvMap(arena);
-
-    var cfg_context = try config.openConfig(arena, &env_map);
+    var cfg_context = try config.openConfig(arena);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -138,15 +126,13 @@ fn addPaths(arena: Allocator, paths: []const []const u8) !void {
 
     cfg.project_roots = path_set.keys();
 
-    try updateConfig(cfg_context.config_file, cfg);
+    try config.updateConfig(cfg_context.config_file, cfg);
 }
 
 fn setPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    const env_map = try process.getEnvMap(arena);
-
-    var cfg_context = try config.openConfig(arena, &env_map);
+    var cfg_context = try config.openConfig(arena);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -163,15 +149,13 @@ fn setPaths(arena: Allocator, paths: []const []const u8) !void {
 
     cfg.project_roots = path_set.keys();
 
-    try updateConfig(cfg_context.config_file, cfg);
+    try config.updateConfig(cfg_context.config_file, cfg);
 }
 
 fn removePaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    const env_map = try process.getEnvMap(arena);
-
-    var cfg_context = try config.openConfig(arena, &env_map);
+    var cfg_context = try config.openConfig(arena);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -180,21 +164,20 @@ fn removePaths(arena: Allocator, paths: []const []const u8) !void {
     defer path_set.deinit(arena);
 
     const cwd = fs.cwd();
+    var path_buf: [fs.max_path_bytes]u8 = undefined;
     for (paths) |path| {
         if (path.len == 0) continue;
-        const real_path = try cwd.realpathAlloc(arena, path);
+        const real_path = try cwd.realpath(path, &path_buf);
         _ = path_set.swapRemove(real_path);
     }
 
     cfg.project_roots = path_set.keys();
 
-    try updateConfig(cfg_context.config_file, cfg);
+    try config.updateConfig(cfg_context.config_file, cfg);
 }
 
 fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
-    const env_map = try process.getEnvMap(arena);
-
-    var cfg_context = try config.openConfig(arena, &env_map);
+    var cfg_context = try config.openConfig(arena);
     cfg_context.config_file.close();
 
     const cfg = cfg_context.config;
@@ -205,63 +188,69 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
 
     const preview = search_opts.preview orelse cfg.preview;
 
-    var fzf_proc = try spawnFzf(arena, search_opts.project, preview);
-
     // +1 for the new line
     var path_buf: [fs.max_path_bytes + 1]u8 = undefined;
     const path = searchProject(
         arena,
-        &fzf_proc,
         cfg.project_roots,
         search_opts.project,
+        preview,
         &path_buf,
     ) catch |err| switch (err) {
         error.FzfNotFound => exit("fzf binary not found in path\n"),
         error.NoProjectsFound => exit("no projects found\n"),
         else => return err,
-    };
+    } orelse return;
 
-    if (path) |p| {
-        std.debug.print("found {s}\n", .{p});
-    } else {
-        std.debug.print("search aborted\n", .{});
+    const action = search_opts.action orelse cfg.action;
+    switch (action) {
+        .print => try File.stdout().writeAll(path),
+
+        inline else => |a| {
+            const err = tmux.handleTmux(
+                arena,
+                @field(tmux.Action, @tagName(a)),
+                path,
+            );
+            switch (err) {
+                error.TmuxNotFound => exit("tmux binary not found in path\n"),
+                else => return err,
+            }
+        },
     }
 }
 
-const SearchError =
-    error{
-        NoProjectsFound,
-        // from killing the process
-        AlreadyTerminated,
-    } ||
+const SearchError = error{NoProjectsFound} ||
     ExtractError || walk.SearchError || process.Child.SpawnError;
 
 /// searches for project. returned slice may or may not be the buffer passed in.
-/// always terminates the passed-in process
 fn searchProject(
     arena: Allocator,
-    fzf_proc: *process.Child,
     roots: []const []const u8,
     project_query: []const u8,
+    preview: []const u8,
     path_buf: []u8,
 ) SearchError!?[]const u8 {
+    var fzf_proc = try spawnFzf(arena, project_query, preview);
+    errdefer _ = fzf_proc.kill() catch {};
+
     var buf: [256]u8 = undefined;
     var fzf_bw = fzf_proc.stdin.?.writer(&buf);
     const fzf_stdin = &fzf_bw.interface;
 
     const project_set = walk.searchProjects(arena, roots, .{
         .writer = fzf_stdin,
-        .flush_after = .project,
-    }) catch |err| return switch (err) {
+        .flush_after = .root,
+    }) catch |err| switch (err) {
         // most likely failed due to selecting a project before finishing search
-        error.WriteFailed => extractProject(fzf_proc, path_buf),
-        else => err,
+        error.WriteFailed => return extractProject(&fzf_proc, path_buf),
+        else => return err,
     };
 
     const projects = project_set.keys();
 
     if (projects.len == 0) {
-        _ = try fzf_proc.kill();
+        _ = fzf_proc.kill() catch {};
         return error.NoProjectsFound;
     }
 
@@ -270,19 +259,19 @@ fn searchProject(
 
     if (matchProject(project_query, projects)) |matched_path| {
         // found singular exact project match, abort fzf and return
-        _ = try fzf_proc.kill();
+        _ = fzf_proc.kill() catch {};
         // TODO: should we fill the path_buf and return it for consistency?
         return matched_path;
     }
 
-    return extractProject(fzf_proc, path_buf);
+    return extractProject(&fzf_proc, path_buf);
 }
 
 const ExtractError = error{
     FzfNotFound,
-    NonZeroExitCode,
-    BadTermination,
-} || std.Io.Reader.DelimiterError || process.Child.WaitError;
+    FzfNonZeroExitCode,
+    FzfBadTermination,
+} || Reader.DelimiterError || process.Child.WaitError;
 
 fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 {
     var br = fzf_proc.stdout.?.reader(buf);
@@ -290,7 +279,10 @@ fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 
 
     const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
         error.EndOfStream => null,
-        else => return err,
+        else => {
+            _ = fzf_proc.kill() catch {};
+            return err;
+        },
     };
 
     const term = fzf_proc.wait() catch |err| switch (err) {
@@ -302,9 +294,9 @@ fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 
         .Exited => |code| switch (code) {
             0 => path,
             FZF_NO_MATCH_EXIT_CODE, FZF_INTERRUPT_EXIT_CODE => null,
-            else => error.NonZeroExitCode,
+            else => error.FzfNonZeroExitCode,
         },
-        else => error.BadTermination,
+        else => error.FzfBadTermination,
     };
 }
 
