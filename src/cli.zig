@@ -33,8 +33,6 @@ pub const SearchOpts = struct {
     project: []const u8 = "",
     /// fzf preview command. --no-preview sets this as an empty string
     preview: ?[]const u8 = null,
-    /// tmux script to run after a new session
-    script: ?[]const u8 = null,
     /// action to take on project found
     action: ?SearchAction = null,
 };
@@ -79,8 +77,6 @@ pub fn parse(diag: *const Diagnostic, args: []const []const u8) ArgParseError!Co
             search_opts.preview = try getNextValidArg(&iter, .preview, diag);
         } else if (mem.eql(u8, "--no-preview", arg)) {
             search_opts.preview = "";
-        } else if (mem.eql(u8, "--script", arg)) {
-            search_opts.script = try getNextValidArg(&iter, .script, diag);
         } else if (mem.eql(u8, "--action", arg)) {
             const action = try getNextValidArg(&iter, .action, diag);
             search_opts.action = std.meta.stringToEnum(SearchAction, action) orelse {
@@ -502,12 +498,6 @@ fn test_searchCommand(args: []const []const u8, expected_search_opts: SearchOpts
         try std.testing.expectEqual(null, search_opts.preview);
     }
 
-    if (expected_search_opts.script) |script| {
-        try std.testing.expectEqualStrings(script, search_opts.script.?);
-    } else {
-        try std.testing.expectEqual(null, search_opts.script);
-    }
-
     try std.testing.expectEqual(expected_search_opts.action, search_opts.action);
     try std.testing.expectEqualStrings(expected_search_opts.project, search_opts.project);
 
@@ -519,25 +509,21 @@ test "parse search command correctly" {
         try test_searchCommand(&.{"cs"}, .{
             .project = "",
             .preview = null,
-            .script = null,
             .action = null,
         });
         try test_searchCommand(&.{ "cs", "my-project" }, .{
             .project = "my-project",
             .preview = null,
-            .script = null,
             .action = null,
         });
         try test_searchCommand(&.{ "cs", "my-project", "other-project" }, .{
             .project = "other-project",
             .preview = null,
-            .script = null,
             .action = null,
         });
         try test_searchCommand(&.{ "cs", "my-project", "" }, .{
             .project = "",
             .preview = null,
-            .script = null,
             .action = null,
         });
     }
@@ -545,71 +531,31 @@ test "parse search command correctly" {
         try test_searchCommand(&.{ "cs", "--preview", "bat {}" }, .{
             .project = "",
             .preview = "bat {}",
-            .script = null,
             .action = null,
         });
         try test_searchCommand(&.{ "cs", "--preview", "" }, .{
             .project = "",
             .preview = "",
-            .script = null,
             .action = null,
         });
         try test_searchCommand(&.{ "cs", "--preview", "bat {}", "--no-preview" }, .{
             .project = "",
             .preview = "",
-            .script = null,
             .action = null,
         });
         try test_searchCommand(&.{ "cs", "proj", "--preview", "bat {}" }, .{
             .project = "proj",
             .preview = "bat {}",
-            .script = null,
             .action = null,
         });
         try test_searchCommand(&.{ "cs", "--preview", "bat {}", "proj" }, .{
             .project = "proj",
             .preview = "bat {}",
-            .script = null,
             .action = null,
         });
         try test_searchCommand(&.{ "cs", "one", "--preview", "bat {}", "two" }, .{
             .project = "two",
             .preview = "bat {}",
-            .script = null,
-            .action = null,
-        });
-    }
-    { // script
-        try test_searchCommand(&.{ "cs", "--script", "echo hi" }, .{
-            .project = "",
-            .preview = null,
-            .script = "echo hi",
-            .action = null,
-        });
-        try test_searchCommand(&.{ "cs", "--script", "" }, .{
-            .project = "",
-            .preview = null,
-            .script = "",
-            .action = null,
-        });
-
-        try test_searchCommand(&.{ "cs", "--script", "echo hi", "--script", "echo bye" }, .{
-            .project = "",
-            .preview = null,
-            .script = "echo bye",
-            .action = null,
-        });
-        try test_searchCommand(&.{ "cs", "proj", "--script", "echo hi" }, .{
-            .project = "proj",
-            .preview = null,
-            .script = "echo hi",
-            .action = null,
-        });
-
-        try test_searchCommand(&.{ "cs", "--script", "echo hi", "proj" }, .{
-            .project = "proj",
-            .preview = null,
-            .script = "echo hi",
             .action = null,
         });
     }
@@ -617,39 +563,33 @@ test "parse search command correctly" {
         try test_searchCommand(&.{ "cs", "--action", "print" }, .{
             .project = "",
             .preview = null,
-            .script = null,
             .action = .print,
         });
         try test_searchCommand(&.{ "cs", "--print" }, .{
             .project = "",
             .preview = null,
-            .script = null,
             .action = .print,
         });
         try test_searchCommand(&.{ "cs", "--action", "print", "--window" }, .{
             .project = "",
             .preview = null,
-            .script = null,
             .action = .window,
         });
         try test_searchCommand(&.{ "cs", "--print", "proj", "--session" }, .{
             .project = "proj",
             .preview = null,
-            .script = null,
             .action = .session,
         });
     }
     { // mix
-        try test_searchCommand(&.{ "cs", "proj", "--preview", "bat {}", "--script", "echo hi", "--action", "print" }, .{
+        try test_searchCommand(&.{ "cs", "proj", "--preview", "bat {}", "--action", "print" }, .{
             .project = "proj",
             .preview = "bat {}",
-            .script = "echo hi",
             .action = .print,
         });
         try test_searchCommand(&.{ "cs", "--session", "--preview", "bat {}", "proj" }, .{
             .project = "proj",
             .preview = "bat {}",
-            .script = null,
             .action = .session,
         });
     }
@@ -665,19 +605,6 @@ test "correctly fails bad search command" {
         try test_failure(
             &.{ "cs", "--preview", "--help" },
             "error parsing preview flag: illegal argument, not expecting flag: --help\n",
-            error.IllegalArgument,
-        );
-    }
-
-    { // script
-        try test_failure(
-            &.{ "cs", "--script" },
-            "error parsing script flag: expected argument, none found\n",
-            error.MissingArgument,
-        );
-        try test_failure(
-            &.{ "cs", "--script", "--help" },
-            "error parsing script flag: illegal argument, not expecting flag: --help\n",
             error.IllegalArgument,
         );
     }

@@ -14,14 +14,11 @@ const default_fzf_preview = switch (builtin.os.tag) {
     else => "ls {}",
 };
 
-// TODO: do we even want the script?
 pub const Config = struct {
     /// directories to search for projects
     project_roots: []const []const u8 = &.{},
     /// fzf preview command. --no-preview sets this as an empty string
     preview: []const u8 = default_fzf_preview,
-    /// tmux script to run after a new session
-    script: ?[]const u8 = null,
     /// action to take on project found
     action: SearchAction = .session,
 };

@@ -36,7 +36,6 @@ const USAGE =
     \\  -r, --remove-paths <path> [...]  update config removing search paths
     \\  --no-preview                     disables fzf preview
     \\  --preview <str>                  preview command to pass to fzf
-    \\  --script  <str>                  script to run on new tmux session
     \\  --action  <action>               action to execute after finding repository.
     \\                                     options: session, window, print
     \\                                     can call the action directly, e.g. --print
