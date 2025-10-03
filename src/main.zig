@@ -279,7 +279,10 @@ fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 
 
     const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
         error.EndOfStream => null,
-        else => return err,
+        else => {
+            _ = fzf_proc.kill() catch {};
+            return err;
+        },
     };
 
     const term = fzf_proc.wait() catch |err| switch (err) {

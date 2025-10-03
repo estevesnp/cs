@@ -1,45 +1,41 @@
 const std = @import("std");
 const mem = std.mem;
 const process = std.process;
-const testing = std.testing;
-const Writer = std.Io.Writer;
-const Reader = std.Io.Reader;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 pub const Action = enum { session, window };
+pub const Error = SessionError || error{TmuxNotFound};
 
-// TODO: unify error handling
 pub fn handleTmux(
     gpa: Allocator,
     action: Action,
     project_path: []const u8,
-) SessionError {
+) Error {
     var basename_buf: [256]u8 = undefined;
     const session_name = normalizeBasename(std.fs.path.basename(project_path), &basename_buf);
     const inside_session = std.posix.getenv("TMUX") != null;
 
-    switch (action) {
-        .session => return handleTmuxSession(
+    const err = switch (action) {
+        .session => handleTmuxSession(
             gpa,
             inside_session,
             project_path,
             session_name,
         ),
-        .window => return handleTmuxWindow(
+        .window => handleTmuxWindow(
             gpa,
             inside_session,
             project_path,
             session_name,
         ),
-    }
-}
+    };
 
-const SessionError = process.ExecvError || process.Child.RunError || Writer.Error || Reader.DelimiterError || error{
-    TmuxNotFound,
-    TmuxNonZeroExitCode,
-    TmuxBadTermination,
-};
+    return switch (err) {
+        error.FileNotFound => error.TmuxNotFound,
+        else => err,
+    };
+}
 
 fn createAndAttachSession(
     gpa: Allocator,
@@ -56,6 +52,8 @@ fn createAndAttachSession(
         project_path,
     });
 }
+
+const SessionError = process.ExecvError || process.Child.RunError || error{TmuxExitError};
 
 /// creates a new session called `session_name` if one doesn't already exist.
 /// then attaches to that session.
@@ -82,10 +80,11 @@ fn handleTmuxSession(
         .Exited => |code| if (code != 0) {
             if (!mem.startsWith(u8, res.stderr, "duplicate session")) {
                 // TODO: diagnostics
-                return error.TmuxNonZeroExitCode;
+                return error.TmuxExitError;
             }
         },
-        else => return error.TmuxBadTermination,
+        // TODO: diagnostics
+        else => return error.TmuxExitError,
     }
 
     return process.execv(gpa, &.{
@@ -96,28 +95,21 @@ fn handleTmuxSession(
     });
 }
 
-const TmuxWriteReadError = error{TmuxReadError} || Writer.Error || Reader.DelimiterError;
-
 /// if inside a session, creates a new window called `session_name`.
-/// if not, just calls `handleTmuxSession`, creating a new session
+/// if not, just creates a new session
 fn handleTmuxWindow(
     gpa: Allocator,
     inside_session: bool,
     project_path: []const u8,
     session_name: []const u8,
-) SessionError {
-    // TODO: maybe pass this to method above?
+) process.ExecvError {
     if (!inside_session) {
         return createAndAttachSession(gpa, project_path, session_name);
     }
 
     const args = &.{ "tmux", "new-window", "-c", project_path, "-n", session_name };
 
-    const err = process.execv(gpa, args);
-    return switch (err) {
-        error.FileNotFound => error.TmuxNotFound,
-        else => err,
-    };
+    return process.execv(gpa, args);
 }
 
 fn normalizeBasename(basename: []const u8, buf: []u8) []u8 {
