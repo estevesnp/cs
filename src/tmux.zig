@@ -12,13 +12,12 @@ pub const Action = enum { session, window };
 // TODO: unify error handling
 pub fn handleTmux(
     gpa: Allocator,
-    env_map: *const process.EnvMap,
     action: Action,
     project_path: []const u8,
 ) SessionError {
     var basename_buf: [256]u8 = undefined;
     const session_name = normalizeBasename(std.fs.path.basename(project_path), &basename_buf);
-    const inside_session = env_map.get("TMUX") != null;
+    const inside_session = std.posix.getenv("TMUX") != null;
 
     switch (action) {
         .session => return handleTmuxSession(

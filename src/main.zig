@@ -107,25 +107,10 @@ fn env() File.WriteError!void {
     try File.stdout().writeAll("env\n");
 }
 
-fn updateConfig(cfg_file: File, cfg: config.Config) !void {
-    try cfg_file.setEndPos(0);
-    try cfg_file.seekTo(0);
-
-    var buf: [1024]u8 = undefined;
-    var file_bw = cfg_file.writer(&buf);
-
-    const file_writer = &file_bw.interface;
-
-    try std.json.Stringify.value(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, file_writer);
-    try file_writer.flush();
-}
-
 fn addPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    const env_map = try process.getEnvMap(arena);
-
-    var cfg_context = try config.openConfig(arena, &env_map);
+    var cfg_context = try config.openConfig(arena);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -142,15 +127,13 @@ fn addPaths(arena: Allocator, paths: []const []const u8) !void {
 
     cfg.project_roots = path_set.keys();
 
-    try updateConfig(cfg_context.config_file, cfg);
+    try config.updateConfig(cfg_context.config_file, cfg);
 }
 
 fn setPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    const env_map = try process.getEnvMap(arena);
-
-    var cfg_context = try config.openConfig(arena, &env_map);
+    var cfg_context = try config.openConfig(arena);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -167,15 +150,13 @@ fn setPaths(arena: Allocator, paths: []const []const u8) !void {
 
     cfg.project_roots = path_set.keys();
 
-    try updateConfig(cfg_context.config_file, cfg);
+    try config.updateConfig(cfg_context.config_file, cfg);
 }
 
 fn removePaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    const env_map = try process.getEnvMap(arena);
-
-    var cfg_context = try config.openConfig(arena, &env_map);
+    var cfg_context = try config.openConfig(arena);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -193,15 +174,11 @@ fn removePaths(arena: Allocator, paths: []const []const u8) !void {
 
     cfg.project_roots = path_set.keys();
 
-    try updateConfig(cfg_context.config_file, cfg);
+    try config.updateConfig(cfg_context.config_file, cfg);
 }
 
 fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
-    // TODO: conside removing fetching the whole map. only reason to leave it
-    // is for compatibility with windows, but if it can't run tmux, what's the point
-    const env_map = try process.getEnvMap(arena);
-
-    var cfg_context = try config.openConfig(arena, &env_map);
+    var cfg_context = try config.openConfig(arena);
     cfg_context.config_file.close();
 
     const cfg = cfg_context.config;
@@ -233,7 +210,6 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
         inline else => |a| {
             const err = tmux.handleTmux(
                 arena,
-                &env_map,
                 @field(tmux.Action, @tagName(a)),
                 path,
             );
@@ -265,7 +241,7 @@ fn searchProject(
 
     const project_set = walk.searchProjects(arena, roots, .{
         .writer = fzf_stdin,
-        .flush_after = .project,
+        .flush_after = .root,
     }) catch |err| switch (err) {
         // most likely failed due to selecting a project before finishing search
         error.WriteFailed => return extractProject(&fzf_proc, path_buf),

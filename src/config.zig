@@ -35,9 +35,9 @@ pub const ConfigContext = struct {
     }
 };
 
-pub fn openConfig(arena: Allocator, env_map: *const process.EnvMap) !ConfigContext {
+pub fn openConfig(arena: Allocator) !ConfigContext {
     var path_buf: [fs.max_path_bytes]u8 = undefined;
-    const config_path = try getConfigPath(&path_buf, env_map);
+    const config_path = try getConfigPath(&path_buf);
 
     return getConfigContext(arena, config_path);
 }
@@ -84,16 +84,24 @@ fn getConfigContext(arena: Allocator, config_path: []const u8) !ConfigContext {
     };
 }
 
-fn getConfigPath(path_buf: []u8, env_map: *const process.EnvMap) ![]u8 {
-    switch (builtin.os.tag) {
-        .windows => return try joinPaths(path_buf, &.{ env_map.get("APPDATA").?, "cs" }),
-        else => {
-            if (env_map.get("XDG_CONFIG_HOME")) |xdg_home| {
-                return try joinPaths(path_buf, &.{ xdg_home, "cs" });
-            }
-            return try joinPaths(path_buf, &.{ env_map.get("HOME").?, ".config", "cs" });
-        },
+fn getConfigPath(path_buf: []u8) ![]u8 {
+    if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg_home| {
+        return try joinPaths(path_buf, &.{ xdg_home, "cs" });
     }
+    return try joinPaths(path_buf, &.{ std.posix.getenv("HOME").?, ".config", "cs" });
+}
+
+pub fn updateConfig(cfg_file: fs.File, cfg: Config) !void {
+    try cfg_file.setEndPos(0);
+    try cfg_file.seekTo(0);
+
+    var buf: [1024]u8 = undefined;
+    var file_bw = cfg_file.writer(&buf);
+
+    const file_writer = &file_bw.interface;
+
+    try std.json.Stringify.value(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, file_writer);
+    try file_writer.flush();
 }
 
 fn joinPaths(buf: []u8, sub_paths: []const []const u8) error{BufTooSmall}![]u8 {
