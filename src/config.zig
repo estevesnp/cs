@@ -2,11 +2,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 const fs = std.fs;
 const process = std.process;
+const json = std.json;
 const Allocator = std.mem.Allocator;
 
 const cli = @import("cli.zig");
 const SearchAction = cli.SearchAction;
 
+const APP_NAME = "cs";
 const CONFIG_FILE_NAME = "config.json";
 
 const DEFAULT_FZF_PREVIEW = switch (builtin.os.tag) {
@@ -33,40 +35,38 @@ pub const ConfigContext = struct {
     }
 };
 
-pub fn openConfig(arena: Allocator) !ConfigContext {
+pub const OpenConfigError = GetConfigPathError || GetConfigContextError;
+
+pub fn openConfig(arena: Allocator) OpenConfigError!ConfigContext {
     var path_buf: [fs.max_path_bytes]u8 = undefined;
     const config_path = try getConfigPath(&path_buf);
 
     return getConfigContext(arena, config_path);
 }
 
-fn getConfigContext(arena: Allocator, config_path: []const u8) !ConfigContext {
+const GetConfigContextError = fs.Dir.MakeError || fs.Dir.OpenError || fs.Dir.StatFileError || json.ParseError(json.Reader);
+
+fn getConfigContext(arena: Allocator, config_path: []const u8) GetConfigContextError!ConfigContext {
     var config_dir = try fs.cwd().makeOpenPath(config_path, .{});
     defer config_dir.close();
 
-    var config_missing = false;
-    var config_file = config_dir.openFile(CONFIG_FILE_NAME, .{ .mode = .read_write }) catch |err| blk: switch (err) {
-        error.FileNotFound => {
-            config_missing = true;
-            break :blk try config_dir.createFile(CONFIG_FILE_NAME, .{});
+    var config_file = config_dir.openFile(CONFIG_FILE_NAME, .{ .mode = .read_write }) catch |err| switch (err) {
+        // create file if none exists
+        error.FileNotFound => return .{
+            .config_file = try config_dir.createFile(CONFIG_FILE_NAME, .{}),
+            .config = .{},
         },
         else => return err,
     };
 
-    if (config_missing) {
-        return .{
-            .config_file = config_file,
-            .config = .{},
-        };
-    }
-
     var file_buf: [2048]u8 = undefined;
     var file_reader = config_file.reader(&file_buf);
 
-    var json_reader = std.json.Reader.init(arena, &file_reader.interface);
+    var json_reader = json.Reader.init(arena, &file_reader.interface);
     defer json_reader.deinit();
 
-    const config = std.json.parseFromTokenSourceLeaky(Config, arena, &json_reader, .{}) catch |err| {
+    const config = json.parseFromTokenSourceLeaky(Config, arena, &json_reader, .{}) catch |err| {
+        // don't fail if file is empty
         if (err == error.UnexpectedEndOfInput and try config_file.getEndPos() == 0) {
             return .{
                 .config_file = config_file,
@@ -82,22 +82,25 @@ fn getConfigContext(arena: Allocator, config_path: []const u8) !ConfigContext {
     };
 }
 
-fn getConfigPath(path_buf: []u8) ![]u8 {
+const GetConfigPathError = error{ BufTooSmall, HomeNotFound };
+
+fn getConfigPath(path_buf: []u8) GetConfigPathError![]u8 {
     switch (builtin.os.tag) {
         .windows => {
             const key = std.unicode.wtf8ToWtf16LeStringLiteral("APPDATA");
-            const appdata = std.process.getenvW(key).?;
+            const appdata = std.process.getenvW(key) orelse return error.HomeNotFound;
 
             var buf: [std.fs.max_path_bytes]u8 = undefined;
             const n = std.unicode.wtf16LeToWtf8(&buf, appdata);
 
-            return try joinPaths(path_buf, &.{ buf[0..n], "cs" });
+            return try joinPaths(path_buf, &.{ buf[0..n], APP_NAME });
         },
         else => {
             if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg_home| {
-                return try joinPaths(path_buf, &.{ xdg_home, "cs" });
+                return try joinPaths(path_buf, &.{ xdg_home, APP_NAME });
             }
-            return try joinPaths(path_buf, &.{ std.posix.getenv("HOME").?, ".config", "cs" });
+            const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+            return try joinPaths(path_buf, &.{ home, ".config", APP_NAME });
         },
     }
 }
@@ -111,7 +114,7 @@ pub fn updateConfig(cfg_file: fs.File, cfg: Config) !void {
 
     const file_writer = &file_bw.interface;
 
-    try std.json.Stringify.value(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, file_writer);
+    try json.Stringify.value(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, file_writer);
     try file_writer.flush();
 }
 
