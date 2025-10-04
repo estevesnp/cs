@@ -7,6 +7,8 @@ const assert = std.debug.assert;
 pub const Action = enum { session, window };
 pub const Error = SessionError || error{TmuxNotFound};
 
+/// handles the provided `action`, replacing this process by performing an
+/// `execv` onto new process, attaching to a tmux session or window.
 pub fn handleTmux(
     gpa: Allocator,
     action: Action,
@@ -37,6 +39,9 @@ pub fn handleTmux(
     };
 }
 
+/// when outside of a session, attemps to create a new one with `session_name`
+/// starting from `project_path`. if one already exists, attaches to it
+/// instead. fails if inside a session due to session nesting.
 fn createAndAttachSession(
     gpa: Allocator,
     project_path: []const u8,
@@ -55,8 +60,8 @@ fn createAndAttachSession(
 
 const SessionError = process.ExecvError || process.Child.RunError || error{TmuxExitError};
 
-/// creates a new session called `session_name` if one doesn't already exist.
-/// then attaches to that session.
+/// create a session with `session_name` starting from `project_path`. if one
+/// already exists, attach to it instead.
 fn handleTmuxSession(
     gpa: Allocator,
     inside_session: bool,
@@ -95,8 +100,9 @@ fn handleTmuxSession(
     });
 }
 
-/// if inside a session, creates a new window called `session_name`.
-/// if not, just creates a new session
+/// create a new window in the existing session with name of `session_name`
+/// starting from the `project_path`. creates a new session if not inside one
+/// already.
 fn handleTmuxWindow(
     gpa: Allocator,
     inside_session: bool,
@@ -112,6 +118,8 @@ fn handleTmuxWindow(
     return process.execv(gpa, args);
 }
 
+/// normalizes the basename of a directory for tmux, trimming it and replacing
+/// `.` with `_`.
 fn normalizeBasename(basename: []const u8, buf: []u8) []u8 {
     assert(buf.len >= basename.len);
 
