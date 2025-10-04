@@ -83,7 +83,10 @@ pub fn parse(diag: *const Diagnostic, args: []const []const u8) ArgParseError!Co
                 diag.report(.action, "illegal action: {s}", .{action});
                 return error.IllegalArgument;
             };
+        } else if (mem.eql(u8, "-w", arg)) {
+            search_opts.action = .window;
         } else if (mem.startsWith(u8, arg, "--")) {
+            // try find --{action}, skipping the '--'
             search_opts.action = std.meta.stringToEnum(SearchAction, arg[2..]) orelse {
                 diag.reportMessage("illegal flag: {s}", .{arg});
                 return error.IllegalArgument;
@@ -579,6 +582,11 @@ test "parse search command correctly" {
             .project = "proj",
             .preview = null,
             .action = .session,
+        });
+        try test_searchCommand(&.{ "cs", "-w" }, .{
+            .project = "",
+            .preview = null,
+            .action = .window,
         });
     }
     { // mix

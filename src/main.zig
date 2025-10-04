@@ -39,6 +39,7 @@ const USAGE =
     \\  --action  <action>               action to execute after finding repository.
     \\                                     options: session, window, print
     \\                                     can call the action directly, e.g. --print
+    \\                                     can also do -w instead of --window
     \\
     \\
     \\description:
