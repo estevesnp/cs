@@ -222,8 +222,8 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
     }
 }
 
-const SearchError = error{NoProjectsFound} ||
-    ExtractError || walk.SearchError || process.Child.SpawnError;
+const SearchError = ExtractError || walk.SearchError || process.Child.SpawnError ||
+    error{NoProjectsFound};
 
 /// searches for project. returned slice may or may not be the buffer passed in.
 fn searchProject(
@@ -269,11 +269,11 @@ fn searchProject(
     return extractProject(&fzf_proc, path_buf);
 }
 
-const ExtractError = error{
+const ExtractError = Reader.DelimiterError || process.Child.WaitError || error{
     FzfNotFound,
     FzfNonZeroExitCode,
     FzfBadTermination,
-} || Reader.DelimiterError || process.Child.WaitError;
+};
 
 fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 {
     var br = fzf_proc.stdout.?.reader(buf);
@@ -302,7 +302,9 @@ fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 
     };
 }
 
-fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) process.Child.SpawnError!process.Child {
+const SpawnFzfError = process.Child.SpawnError || error{FzfNotFound};
+
+fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) SpawnFzfError!process.Child {
     var fzf_proc = std.process.Child.init(&.{
         "fzf",
         "--header=choose a repo",
@@ -318,7 +320,10 @@ fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) process.Ch
     fzf_proc.stdin_behavior = .Pipe;
     fzf_proc.stdout_behavior = .Pipe;
 
-    try fzf_proc.spawn();
+    fzf_proc.spawn() catch |err| switch (err) {
+        error.FileNotFound => return error.FzfNotFound,
+        else => return err,
+    };
 
     return fzf_proc;
 }
