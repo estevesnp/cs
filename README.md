@@ -47,5 +47,6 @@ csd() {
 
 ## TODO
 
+- propper error diagnostics
 - native frontend
 - shell completions?
