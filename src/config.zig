@@ -5,10 +5,11 @@ const process = std.process;
 const Allocator = std.mem.Allocator;
 
 const cli = @import("cli.zig");
-
 const SearchAction = cli.SearchAction;
 
-const default_fzf_preview = switch (builtin.os.tag) {
+const CONFIG_FILE_NAME = "config.json";
+
+const DEFAULT_FZF_PREVIEW = switch (builtin.os.tag) {
     // works in cmd and powershell
     .windows => "dir {}",
     else => "ls {}",
@@ -18,7 +19,7 @@ pub const Config = struct {
     /// directories to search for projects
     project_roots: []const []const u8 = &.{},
     /// fzf preview command. --no-preview sets this as an empty string
-    preview: []const u8 = default_fzf_preview,
+    preview: []const u8 = DEFAULT_FZF_PREVIEW,
     /// action to take on project found
     action: SearchAction = .session,
 };
@@ -44,10 +45,10 @@ fn getConfigContext(arena: Allocator, config_path: []const u8) !ConfigContext {
     defer config_dir.close();
 
     var config_missing = false;
-    var config_file = config_dir.openFile("config.json", .{ .mode = .read_write }) catch |err| blk: switch (err) {
+    var config_file = config_dir.openFile(CONFIG_FILE_NAME, .{ .mode = .read_write }) catch |err| blk: switch (err) {
         error.FileNotFound => {
             config_missing = true;
-            break :blk try config_dir.createFile("config.json", .{});
+            break :blk try config_dir.createFile(CONFIG_FILE_NAME, .{});
         },
         else => return err,
     };
@@ -82,10 +83,23 @@ fn getConfigContext(arena: Allocator, config_path: []const u8) !ConfigContext {
 }
 
 fn getConfigPath(path_buf: []u8) ![]u8 {
-    if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg_home| {
-        return try joinPaths(path_buf, &.{ xdg_home, "cs" });
+    switch (builtin.os.tag) {
+        .windows => {
+            const key = std.unicode.wtf8ToWtf16LeStringLiteral("APPDATA");
+            const appdata = std.process.getenvW(key).?;
+
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
+            const n = std.unicode.wtf16LeToWtf8(&buf, appdata);
+
+            return try joinPaths(path_buf, &.{ buf[0..n], "cs" });
+        },
+        else => {
+            if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg_home| {
+                return try joinPaths(path_buf, &.{ xdg_home, "cs" });
+            }
+            return try joinPaths(path_buf, &.{ std.posix.getenv("HOME").?, ".config", "cs" });
+        },
     }
-    return try joinPaths(path_buf, &.{ std.posix.getenv("HOME").?, ".config", "cs" });
 }
 
 pub fn updateConfig(cfg_file: fs.File, cfg: Config) !void {

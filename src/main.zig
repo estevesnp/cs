@@ -207,6 +207,8 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
         .print => try File.stdout().writeAll(path),
 
         inline else => |a| {
+            if (builtin.os.tag == .windows) exit("tmux is not supported on windows\n");
+
             const err = tmux.handleTmux(
                 arena,
                 @field(tmux.Action, @tagName(a)),
