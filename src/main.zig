@@ -305,7 +305,7 @@ fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 
 const SpawnFzfError = process.Child.SpawnError || error{FzfNotFound};
 
 fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) SpawnFzfError!process.Child {
-    var fzf_proc = std.process.Child.init(&.{
+    var fzf_proc = process.Child.init(&.{
         "fzf",
         "--header=choose a repo",
         "--reverse",

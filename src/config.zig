@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const fs = std.fs;
 const process = std.process;
+const unicode = std.unicode;
 const json = std.json;
 const Allocator = std.mem.Allocator;
 
@@ -87,11 +88,11 @@ const GetConfigPathError = error{ BufTooSmall, HomeNotFound };
 fn getConfigPath(path_buf: []u8) GetConfigPathError![]u8 {
     switch (builtin.os.tag) {
         .windows => {
-            const key = std.unicode.wtf8ToWtf16LeStringLiteral("APPDATA");
-            const appdata = std.process.getenvW(key) orelse return error.HomeNotFound;
+            const key = unicode.wtf8ToWtf16LeStringLiteral("APPDATA");
+            const appdata = process.getenvW(key) orelse return error.HomeNotFound;
 
-            var buf: [std.fs.max_path_bytes]u8 = undefined;
-            const n = std.unicode.wtf16LeToWtf8(&buf, appdata);
+            var buf: [fs.max_path_bytes]u8 = undefined;
+            const n = unicode.wtf16LeToWtf8(&buf, appdata);
 
             return try joinPaths(path_buf, &.{ buf[0..n], APP_NAME });
         },
