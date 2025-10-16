@@ -241,9 +241,12 @@ fn searchProject(
     var fzf_bw = fzf_proc.stdin.?.writer(&buf);
     const fzf_stdin = &fzf_bw.interface;
 
+    // needed since the compiler creates a new enum when building `options`
+    const flush_after = @field(walk.FlushAfter, @tagName(options.fzf_flush_after));
+
     const project_set = walk.searchProjects(arena, roots, .{
         .writer = fzf_stdin,
-        .flush_after = .root,
+        .flush_after = flush_after,
     }) catch |err| switch (err) {
         // most likely failed due to selecting a project before finishing search
         error.WriteFailed => return extractProject(&fzf_proc, path_buf),

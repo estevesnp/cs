@@ -1,7 +1,9 @@
 const std = @import("std");
 
+const walk = @import("src/walk.zig");
 const build_zig_zon: Z = @import("build.zig.zon");
 
+/// build.zig.zon schema
 const Z = struct {
     name: enum { cs },
     version: []const u8,
@@ -15,10 +17,25 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const version = try std.SemanticVersion.parse(build_zig_zon.version);
-
     const options = b.addOptions();
+
+    const version = try std.SemanticVersion.parse(build_zig_zon.version);
     options.addOption(std.SemanticVersion, "cs_version", version);
+
+    const flush_flag = "fzf-flush-after";
+
+    const fzf_flush_after = b.option(
+        walk.FlushAfter,
+        flush_flag,
+        "Determine when to flush the projects found to fzf",
+    ) orelse .root;
+
+    if (fzf_flush_after == .never) {
+        std.log.err("Cannot pass 'never' to {s}", .{flush_flag});
+        std.process.exit(1);
+    }
+
+    options.addOption(walk.FlushAfter, "fzf_flush_after", fzf_flush_after);
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
