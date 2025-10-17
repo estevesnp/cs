@@ -82,7 +82,7 @@ pub fn main() !void {
     switch (command) {
         .help => try help(),
         .version => try version(),
-        .env => try env(),
+        .env => try env(arena),
         .@"add-paths" => |paths| try addPaths(arena, paths),
         .@"set-paths" => |paths| try setPaths(arena, paths),
         .@"remove-paths" => |paths| try removePaths(arena, paths),
@@ -103,14 +103,35 @@ fn version() Writer.Error!void {
     try stdout.flush();
 }
 
-fn env() File.WriteError!void {
-    try File.stdout().writeAll("env\n");
+const EnvError = config.OpenConfigError || Writer.Error;
+
+fn env(arena: Allocator) EnvError!void {
+    var path_buf: [fs.max_path_bytes]u8 = undefined;
+    var cfg_context = try config.openConfig(arena, .{ .config_path_buf = &path_buf });
+    defer cfg_context.deinit();
+
+    const cfg = cfg_context.config;
+
+    var stdout_buf: [256]u8 = undefined;
+    var stdout_writer = File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
+
+    try stdout.print("cs config path: {s}\n", .{&path_buf});
+
+    if (cfg.project_roots.len > 0) {
+        try stdout.writeAll("project roots:\n");
+        for (cfg.project_roots) |root| {
+            try stdout.print("  - {s}\n", .{root});
+        }
+    }
+
+    try stdout.flush();
 }
 
 fn addPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(arena);
+    var cfg_context = try config.openConfig(arena, .{});
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -133,7 +154,7 @@ fn addPaths(arena: Allocator, paths: []const []const u8) !void {
 fn setPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(arena);
+    var cfg_context = try config.openConfig(arena, .{});
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -156,7 +177,7 @@ fn setPaths(arena: Allocator, paths: []const []const u8) !void {
 fn removePaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(arena);
+    var cfg_context = try config.openConfig(arena, .{});
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -178,7 +199,7 @@ fn removePaths(arena: Allocator, paths: []const []const u8) !void {
 }
 
 fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
-    var cfg_context = try config.openConfig(arena);
+    var cfg_context = try config.openConfig(arena, .{});
     cfg_context.config_file.close();
 
     const cfg = cfg_context.config;

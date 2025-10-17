@@ -38,10 +38,25 @@ pub const ConfigContext = struct {
 
 pub const OpenConfigError = GetConfigPathError || GetConfigContextError;
 
-pub fn openConfig(arena: Allocator) OpenConfigError!ConfigContext {
-    var path_buf: [fs.max_path_bytes]u8 = undefined;
-    const config_path = try getConfigPath(&path_buf);
+pub const OpenConfigOpts = struct {
+    config_path_buf: ?[]u8 = null,
+};
 
+/// opens and deserializes the app's config file.
+/// accepts an optional buffer that gets filled with the config path.
+/// memsets the buffer to 0 and asserts that it is big enough for the path.
+/// asserts that the buffer is big enough for the path and memsets it to 0.
+pub fn openConfig(arena: Allocator, opts: OpenConfigOpts) OpenConfigError!ConfigContext {
+    if (opts.config_path_buf) |path_buf| {
+        return openConfigWithBuf(arena, path_buf);
+    }
+
+    var path_buf: [fs.max_path_bytes]u8 = undefined;
+    return openConfigWithBuf(arena, &path_buf);
+}
+
+fn openConfigWithBuf(arena: Allocator, path_buf: []u8) OpenConfigError!ConfigContext {
+    const config_path = try getConfigPath(path_buf);
     return getConfigContext(arena, config_path);
 }
 
@@ -142,7 +157,14 @@ fn joinPaths(buf: []u8, sub_paths: []const []const u8) error{BufTooSmall}![]u8 {
         }
     }
 
-    return buf[0..idx];
+    const path = buf[0..idx];
+
+    // set the rest of the buffer to 0
+    if (path.len < buf.len) {
+        @memset(buf[path.len..buf.len], 0);
+    }
+
+    return path;
 }
 
 test "ref all decls" {
@@ -152,11 +174,17 @@ test "ref all decls" {
 test joinPaths {
     {
         var buf: [fs.max_path_bytes]u8 = undefined;
-        try std.testing.expectEqualStrings("abc/def/ghi", try joinPaths(&buf, &.{ "abc", "def", "ghi" }));
+        const expected = "abc/def/ghi";
+        try std.testing.expectEqualStrings(expected, try joinPaths(&buf, &.{ "abc", "def", "ghi" }));
+        try std.testing.expectStringStartsWith(&buf, expected);
+        for (buf[expected.len..]) |char| {
+            try std.testing.expectEqual(0, char);
+        }
     }
     {
-        var buf: [fs.max_path_bytes]u8 = undefined;
-        try std.testing.expectEqualStrings("abc/def", try joinPaths(&buf, &.{ "abc", "def" }));
+        const expected = "abc/def";
+        var buf: [expected.len]u8 = undefined;
+        try std.testing.expectEqualStrings(expected, try joinPaths(&buf, &.{ "abc", "def" }));
     }
     {
         var buf: [fs.max_path_bytes]u8 = undefined;
