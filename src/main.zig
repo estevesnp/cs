@@ -107,8 +107,10 @@ const EnvError = config.OpenConfigError || Writer.Error;
 
 fn env(arena: Allocator) EnvError!void {
     var path_buf: [fs.max_path_bytes]u8 = undefined;
-    var cfg_context = try config.openConfig(arena, .{ .config_path_buf = &path_buf });
-    defer cfg_context.deinit();
+    const path = try config.getConfigPath(&path_buf);
+
+    var cfg_context = try config.openConfigFromPath(arena, path);
+    cfg_context.deinit();
 
     const cfg = cfg_context.config;
 
@@ -116,7 +118,7 @@ fn env(arena: Allocator) EnvError!void {
     var stdout_writer = File.stdout().writer(&stdout_buf);
     const stdout = &stdout_writer.interface;
 
-    try stdout.print("cs config path: {s}\n", .{&path_buf});
+    try stdout.print("cs config path: {s}\n", .{path});
 
     if (cfg.project_roots.len > 0) {
         try stdout.writeAll("project roots:\n");
@@ -131,7 +133,7 @@ fn env(arena: Allocator) EnvError!void {
 fn addPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(arena, .{});
+    var cfg_context = try config.openConfig(arena);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -154,7 +156,7 @@ fn addPaths(arena: Allocator, paths: []const []const u8) !void {
 fn setPaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(arena, .{});
+    var cfg_context = try config.openConfig(arena);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -177,7 +179,7 @@ fn setPaths(arena: Allocator, paths: []const []const u8) !void {
 fn removePaths(arena: Allocator, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(arena, .{});
+    var cfg_context = try config.openConfig(arena);
     defer cfg_context.deinit();
 
     var cfg = cfg_context.config;
@@ -199,8 +201,8 @@ fn removePaths(arena: Allocator, paths: []const []const u8) !void {
 }
 
 fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
-    var cfg_context = try config.openConfig(arena, .{});
-    cfg_context.config_file.close();
+    var cfg_context = try config.openConfig(arena);
+    cfg_context.deinit();
 
     const cfg = cfg_context.config;
 
