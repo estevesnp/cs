@@ -361,7 +361,7 @@ fn matchProject(project: []const u8, project_paths: []const []const u8) ?[]const
     var match: ?[]const u8 = null;
 
     for (project_paths) |path| {
-        if (std.mem.endsWith(u8, path, project)) {
+        if (std.mem.eql(u8, fs.path.basename(path), project)) {
             if (match != null) return null;
             match = path;
         }
@@ -391,6 +391,8 @@ test matchProject {
         "/bar/bar/bar",
         "/foo/baz/abc",
     }));
+
+    try testing.expectEqual(null, matchProject("bar", &.{"/foo-bar"}));
 
     try testing.expectEqual(null, matchProject("", &.{"/foo/bar/123"}));
 }
