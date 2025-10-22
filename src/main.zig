@@ -34,6 +34,9 @@ const USAGE =
     \\  -a, --add-paths <path> [...]     update config adding search paths
     \\  -s, --set-paths <path> [...]     update config overriding search paths
     \\  -r, --remove-paths <path> [...]  update config removing search paths
+    \\  --shell [shell]                  print out shell completions.
+    \\                                     options: zsh, bash
+    \\                                     tries to detect shell if none is provided
     \\  --no-preview                     disables fzf preview
     \\  --preview <str>                  preview command to pass to fzf
     \\  --action  <action>               action to execute after finding repository.
@@ -86,6 +89,7 @@ pub fn main() !void {
         .@"add-paths" => |paths| try addPaths(arena, paths),
         .@"set-paths" => |paths| try setPaths(arena, paths),
         .@"remove-paths" => |paths| try removePaths(arena, paths),
+        .shell => |shell| try shellIntegration(arena, shell),
         .search => |opts| try search(arena, opts),
     }
 }
@@ -198,6 +202,28 @@ fn removePaths(arena: Allocator, paths: []const []const u8) !void {
     cfg.project_roots = path_set.keys();
 
     try config.updateConfig(cfg_context.config_file, cfg);
+}
+
+fn shellIntegration(arena: Allocator, shell: ?cli.Shell) !void {
+    const shell_tag = shell orelse blk: {
+        const shell_path = try process.getEnvVarOwned(arena, "SHELL");
+        const shell_name = fs.path.basename(shell_path);
+
+        break :blk std.meta.stringToEnum(cli.Shell, shell_name) orelse return error.UnsupportedShell;
+    };
+
+    const csd_integration = switch (shell_tag) {
+        .zsh, .bash =>
+        \\csd() {
+        \\    local cspath
+        \\    cspath=$(cs --print "$1") || return
+        \\    [ -n "$cspath" ] || return
+        \\    builtin cd -- "$cspath" || return
+        \\}
+        \\
+    };
+
+    try fs.File.stdout().writeAll(csd_integration);
 }
 
 fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {

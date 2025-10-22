@@ -20,6 +20,9 @@ flags:
   -a, --add-paths <path> [...]     update config adding search paths
   -s, --set-paths <path> [...]     update config overriding search paths
   -r, --remove-paths <path> [...]  update config removing search paths
+  --shell [shell]                  print out shell integration functions.
+                                     options: zsh, bash
+                                     tries to detect shell if none is provided
   --no-preview                     disables fzf preview
   --preview <str>                  preview command to pass to fzf
   --action  <action>               action to execute after finding repository.
@@ -34,19 +37,28 @@ description:
   such as creating a new tmux session or changing directory to the project
 ```
 
-## csd function
+## shell integration
+
+current shell integrations:
+
+- `csd` - cd to chosen repository using `cs --print`
+
+### setting up shell integration
+
+- zsh
+
+```zsh
+source <(cs --shell zsh)
+```
+
+- bash
 
 ```bash
-csd() {
-    local cspath
-    cspath=$(cs --print "$1") || return
-    [ -n "$cspath" ] || return
-    builtin cd -- "$cspath" || return
-}
+eval "$(cs --shell bash)"
 ```
 
 ## TODO
 
-- propper error diagnostics
+- propper error diagnostics and error handling
 - native frontend
 - shell completions?

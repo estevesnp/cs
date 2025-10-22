@@ -10,13 +10,24 @@ pub const Command = union(enum) {
     help,
     /// print version
     version,
-    // TODO: implement
+    /// print config and search paths
     env,
+    /// add search paths
     @"add-paths": []const []const u8,
+    /// set search paths
     @"set-paths": []const []const u8,
+    /// remove search paths
     @"remove-paths": []const []const u8,
+    /// shell integration
+    shell: ?Shell,
     /// search for projects
     search: SearchOpts,
+};
+
+/// supported shell integration
+pub const Shell = enum {
+    bash,
+    zsh,
 };
 
 pub const SearchAction = enum {
@@ -71,6 +82,20 @@ pub fn parse(diag: *const Diagnostic, args: []const []const u8) ArgParseError!Co
         if (eqlAny(&.{ "--remove-paths", "-r" }, arg)) {
             try validateFirstArg(&iter, .@"remove-paths", diag);
             return .{ .@"remove-paths" = try getPaths(&iter, .@"remove-paths", diag) };
+        }
+        if (mem.eql(u8, "--shell", arg)) {
+            try validateFirstArg(&iter, .shell, diag);
+
+            if (iter.next()) |shell| {
+                try validateNoMoreArgs(&iter, .shell, diag);
+                const supported_shell = std.meta.stringToEnum(Shell, shell) orelse {
+                    diag.report(.shell, "unsupported shell: {s}", .{shell});
+                    return error.IllegalArgument;
+                };
+                return .{ .shell = supported_shell };
+            }
+
+            return .{ .shell = null };
         }
         // search opts
         if (mem.eql(u8, "--preview", arg)) {
@@ -161,16 +186,24 @@ fn validateFirstArg(
     }
 }
 
+fn validateNoMoreArgs(
+    iter: *ArgIterator,
+    tag: Tag,
+    diag: *const Diagnostic,
+) error{IllegalArgument}!void {
+    if (iter.next()) |arg| {
+        diag.report(tag, "expected to be the last argument, found: {s}", .{arg});
+        return error.IllegalArgument;
+    }
+}
+
 fn validateSingleArg(
     iter: *ArgIterator,
     tag: Tag,
     diag: *const Diagnostic,
 ) error{IllegalArgument}!void {
     try validateFirstArg(iter, tag, diag);
-    if (iter.next()) |arg| {
-        diag.report(tag, "expected to be the last argument, found: {s}", .{arg});
-        return error.IllegalArgument;
-    }
+    try validateNoMoreArgs(iter, tag, diag);
 }
 
 fn eqlAny(haystack: []const []const u8, needle: []const u8) bool {
@@ -218,7 +251,7 @@ pub const Diagnostic = struct {
         comptime fmt: []const u8,
         args: anytype,
     ) void {
-        self.writer.print("error parsing {t} flag: ", .{tag}) catch {};
+        self.writer.print("error parsing '{t}' flag: ", .{tag}) catch {};
         self.reportMessage(fmt, args);
     }
 };
@@ -306,6 +339,20 @@ fn test_failure(args: []const []const u8, comptime expected_message: []const u8,
     try std.testing.expectEqualStrings(expected_message, writer.written());
 }
 
+test "correctly fails bad flag" {
+    try test_failure(
+        &.{ "cs", "--config" },
+        "illegal flag: --config\n",
+        error.IllegalArgument,
+    );
+
+    try test_failure(
+        &.{ "cs", "my_repo", "--verbose" },
+        "illegal flag: --verbose\n",
+        error.IllegalArgument,
+    );
+}
+
 test "parse --help correctly" {
     var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
@@ -324,13 +371,13 @@ test "correctly fails bad --help usage" {
     for (help_flags) |flag| {
         try test_failure(
             &.{ "cs", "my-project", flag },
-            "error parsing help flag: expected to be the first flag, was number 2\n",
+            "error parsing 'help' flag: expected to be the first flag, was number 2\n",
             error.IllegalArgument,
         );
 
         try test_failure(
             &.{ "cs", flag, "my-project" },
-            "error parsing help flag: expected to be the last argument, found: my-project\n",
+            "error parsing 'help' flag: expected to be the last argument, found: my-project\n",
             error.IllegalArgument,
         );
     }
@@ -354,13 +401,13 @@ test "correctly fails bad --version usage" {
     for (version_flags) |flag| {
         try test_failure(
             &.{ "cs", "my-project", flag },
-            "error parsing version flag: expected to be the first flag, was number 2\n",
+            "error parsing 'version' flag: expected to be the first flag, was number 2\n",
             error.IllegalArgument,
         );
 
         try test_failure(
             &.{ "cs", flag, "my-project" },
-            "error parsing version flag: expected to be the last argument, found: my-project\n",
+            "error parsing 'version' flag: expected to be the last argument, found: my-project\n",
             error.IllegalArgument,
         );
     }
@@ -379,13 +426,13 @@ test "parse --env correctly" {
 test "correctly fails bad --env usage" {
     try test_failure(
         &.{ "cs", "my-project", "--env" },
-        "error parsing env flag: expected to be the first flag, was number 2\n",
+        "error parsing 'env' flag: expected to be the first flag, was number 2\n",
         error.IllegalArgument,
     );
 
     try test_failure(
         &.{ "cs", "--env", "my-project" },
-        "error parsing env flag: expected to be the last argument, found: my-project\n",
+        "error parsing 'env' flag: expected to be the last argument, found: my-project\n",
         error.IllegalArgument,
     );
 }
@@ -441,47 +488,64 @@ test "correctly fails bad --add-paths usage" {
         for (flag_set.flags) |flag| {
             try test_failure(
                 &.{ "cs", "my-project", flag, "a/b/c" },
-                "error parsing " ++ flag_name ++ " flag: expected to be the first flag, was number 2\n",
+                "error parsing '" ++ flag_name ++ "' flag: expected to be the first flag, was number 2\n",
                 error.IllegalArgument,
             );
 
             try test_failure(
                 &.{ "cs", flag },
-                "error parsing " ++ flag_name ++ " flag: no path provided\n",
+                "error parsing '" ++ flag_name ++ "' flag: no path provided\n",
                 error.MissingArgument,
             );
 
             try test_failure(
                 &.{ "cs", flag, "a/b/c", "--action", "print" },
-                "error parsing " ++ flag_name ++ " flag: illegal path: --action\n",
+                "error parsing '" ++ flag_name ++ "' flag: illegal path: --action\n",
                 error.IllegalArgument,
             );
 
             try test_failure(
                 &.{ "cs", flag, "--help" },
-                "error parsing " ++ flag_name ++ " flag: illegal path: --help\n",
+                "error parsing '" ++ flag_name ++ "' flag: illegal path: --help\n",
                 error.IllegalArgument,
             );
 
             try test_failure(
                 &.{ "cs", flag, "" },
-                "error parsing " ++ flag_name ++ " flag: empty path\n",
+                "error parsing '" ++ flag_name ++ "' flag: empty path\n",
                 error.IllegalArgument,
             );
         }
     }
 }
 
-test "correctly fails bad flag" {
+fn test_shell(shell: ?Shell, args: []const []const u8) !void {
+    var writer = Writer.Allocating.init(std.testing.allocator);
+    defer writer.deinit();
+
+    const diag: Diagnostic = .{ .writer = &writer.writer };
+
+    const result = try parse(&diag, args);
+
+    try std.testing.expectEqual(shell, result.shell);
+    try std.testing.expectEqual(0, writer.written().len);
+}
+
+test "parse --shell correctly " {
+    try test_shell(.zsh, &.{ "cs", "--shell", "zsh" });
+    try test_shell(.bash, &.{ "cs", "--shell", "bash" });
+    try test_shell(null, &.{ "cs", "--shell" });
+}
+
+test "correctly fails bad --shell usage" {
     try test_failure(
-        &.{ "cs", "--config" },
-        "illegal flag: --config\n",
+        &.{ "cs", "--shell", "powershell" },
+        "error parsing 'shell' flag: unsupported shell: powershell\n",
         error.IllegalArgument,
     );
-
     try test_failure(
-        &.{ "cs", "my_repo", "--verbose" },
-        "illegal flag: --verbose\n",
+        &.{ "cs", "--shell", "zsh", "--json" },
+        "error parsing 'shell' flag: expected to be the last argument, found: --json\n",
         error.IllegalArgument,
     );
 }
@@ -607,12 +671,12 @@ test "correctly fails bad search command" {
     { // preview
         try test_failure(
             &.{ "cs", "--preview" },
-            "error parsing preview flag: expected argument, none found\n",
+            "error parsing 'preview' flag: expected argument, none found\n",
             error.MissingArgument,
         );
         try test_failure(
             &.{ "cs", "--preview", "--help" },
-            "error parsing preview flag: illegal argument, not expecting flag: --help\n",
+            "error parsing 'preview' flag: illegal argument, not expecting flag: --help\n",
             error.IllegalArgument,
         );
     }
@@ -620,12 +684,12 @@ test "correctly fails bad search command" {
     { // action
         try test_failure(
             &.{ "cs", "--action" },
-            "error parsing action flag: expected argument, none found\n",
+            "error parsing 'action' flag: expected argument, none found\n",
             error.MissingArgument,
         );
         try test_failure(
             &.{ "cs", "--action", "exec" },
-            "error parsing action flag: illegal action: exec\n",
+            "error parsing 'action' flag: illegal action: exec\n",
             error.IllegalArgument,
         );
     }
