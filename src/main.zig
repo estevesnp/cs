@@ -30,7 +30,8 @@ const USAGE =
     \\
     \\  -h, --help                       print this message
     \\  -v, -V, --version                print version
-    \\  --env                            print config and environment information
+    \\  --env [--json]                   print config and environment information
+    \\                                     accepts --json flag before or after --env
     \\  -a, --add-paths <path> [...]     update config adding search paths
     \\  -s, --set-paths <path> [...]     update config overriding search paths
     \\  -r, --remove-paths <path> [...]  update config removing search paths
@@ -85,7 +86,7 @@ pub fn main() !void {
     switch (command) {
         .help => try help(),
         .version => try version(),
-        .env => try env(arena),
+        .env => |e| try env(arena, e),
         .@"add-paths" => |paths| try addPaths(arena, paths),
         .@"set-paths" => |paths| try setPaths(arena, paths),
         .@"remove-paths" => |paths| try removePaths(arena, paths),
@@ -109,11 +110,21 @@ fn version() Writer.Error!void {
 
 const EnvError = config.OpenConfigError || Writer.Error;
 
-fn env(arena: Allocator) EnvError!void {
+fn env(arena: Allocator, env_fmt: cli.EnvFmt) EnvError!void {
     var path_buf: [fs.max_path_bytes]u8 = undefined;
-    const path = try config.getConfigPath(&path_buf);
+    const cfg_dir_path = try config.getConfigDirPath(&path_buf);
 
-    var cfg_context = try config.openConfigFromPath(arena, path);
+    // config dir + separator + config file
+    const full_path_len = cfg_dir_path.len + 1 + config.CONFIG_FILE_NAME.len;
+
+    path_buf[cfg_dir_path.len] = fs.path.sep;
+
+    const filename_slice = path_buf[cfg_dir_path.len + 1 ..][0..config.CONFIG_FILE_NAME.len];
+    @memcpy(filename_slice, config.CONFIG_FILE_NAME);
+
+    const full_cfg_path = path_buf[0..full_path_len];
+
+    var cfg_context = try config.openConfigFromPath(arena, cfg_dir_path);
     cfg_context.deinit();
 
     const cfg = cfg_context.config;
@@ -122,16 +133,32 @@ fn env(arena: Allocator) EnvError!void {
     var stdout_writer = File.stdout().writer(&stdout_buf);
     const stdout = &stdout_writer.interface;
 
-    try stdout.print("cs config path: {s}\n", .{path});
-
-    if (cfg.project_roots.len > 0) {
-        try stdout.writeAll("project roots:\n");
-        for (cfg.project_roots) |root| {
-            try stdout.print("  - {s}\n", .{root});
-        }
+    switch (env_fmt) {
+        .txt => try printEnvTxt(stdout, full_cfg_path, cfg.project_roots),
+        .json => try printEnvJson(stdout, full_cfg_path, cfg.project_roots),
     }
 
     try stdout.flush();
+}
+
+fn printEnvTxt(out: *Writer, cfg_path: []const u8, roots: []const []const u8) !void {
+    try out.print("cs config path: {s}\n", .{cfg_path});
+    if (roots.len > 0) {
+        try out.writeAll("project roots:\n");
+        for (roots) |root| {
+            try out.print("  - {s}\n", .{root});
+        }
+    }
+}
+
+const EnvJson = struct {
+    config_path: []const u8,
+    project_roots: []const []const u8,
+};
+
+fn printEnvJson(out: *Writer, cfg_path: []const u8, roots: []const []const u8) !void {
+    const schema: EnvJson = .{ .config_path = cfg_path, .project_roots = roots };
+    try std.json.Stringify.value(schema, .{ .whitespace = .indent_2 }, out);
 }
 
 fn addPaths(arena: Allocator, paths: []const []const u8) !void {

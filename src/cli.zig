@@ -11,7 +11,7 @@ pub const Command = union(enum) {
     /// print version
     version,
     /// print config and search paths
-    env,
+    env: EnvFmt,
     /// add search paths
     @"add-paths": []const []const u8,
     /// set search paths
@@ -22,6 +22,12 @@ pub const Command = union(enum) {
     shell: ?Shell,
     /// search for projects
     search: SearchOpts,
+};
+
+/// formats for printing env
+pub const EnvFmt = enum {
+    txt,
+    json,
 };
 
 /// supported shell integration
@@ -59,18 +65,51 @@ pub fn parse(diag: *const Diagnostic, args: []const []const u8) ArgParseError!Co
     var search_opts: SearchOpts = .{};
 
     while (iter.next()) |arg| {
+        // help
         if (eqlAny(&.{ "--help", "-h" }, arg)) {
             try validateSingleArg(&iter, .help, diag);
             return .help;
         }
+        // version
         if (eqlAny(&.{ "--version", "-v", "-V" }, arg)) {
             try validateSingleArg(&iter, .version, diag);
             return .version;
         }
+        // env
         if (mem.eql(u8, "--env", arg)) {
-            try validateSingleArg(&iter, .env, diag);
-            return .env;
+            try validateFirstArg(&iter, .env, diag);
+
+            const next = iter.next();
+            if (next == null) {
+                return .{ .env = .txt };
+            }
+
+            if (!mem.eql(u8, "--json", next.?)) {
+                diag.report(.env, "expected '--json', found: {s}", .{next.?});
+                return error.IllegalArgument;
+            }
+
+            try validateNoMoreArgs(&iter, .env, diag);
+            return .{ .env = .json };
         }
+        if (mem.eql(u8, "--json", arg)) {
+            try validateFirstArg(&iter, .json, diag);
+
+            const next = iter.next();
+            if (next == null) {
+                diag.report(.json, "flag cannot be used without '--env'", .{});
+                return error.MissingArgument;
+            }
+
+            if (!mem.eql(u8, "--env", next.?)) {
+                diag.report(.json, "expected '--env', found: {s}", .{next.?});
+                return error.IllegalArgument;
+            }
+
+            try validateNoMoreArgs(&iter, .json, diag);
+            return .{ .env = .json };
+        }
+        // paths
         if (eqlAny(&.{ "--add-paths", "-a" }, arg)) {
             try validateFirstArg(&iter, .@"add-paths", diag);
             return .{ .@"add-paths" = try getPaths(&iter, .@"add-paths", diag) };
@@ -83,6 +122,7 @@ pub fn parse(diag: *const Diagnostic, args: []const []const u8) ArgParseError!Co
             try validateFirstArg(&iter, .@"remove-paths", diag);
             return .{ .@"remove-paths" = try getPaths(&iter, .@"remove-paths", diag) };
         }
+        //shell
         if (mem.eql(u8, "--shell", arg)) {
             try validateFirstArg(&iter, .shell, diag);
 
@@ -181,7 +221,7 @@ fn validateFirstArg(
 ) error{IllegalArgument}!void {
     const arg_pos = iter.pos - 1;
     if (arg_pos != 1) {
-        diag.report(tag, "expected to be the first flag, was number {d}", .{arg_pos});
+        diag.report(tag, "expected to be the first flag, was in position {d}", .{arg_pos});
         return error.IllegalArgument;
     }
 }
@@ -192,7 +232,7 @@ fn validateNoMoreArgs(
     diag: *const Diagnostic,
 ) error{IllegalArgument}!void {
     if (iter.next()) |arg| {
-        diag.report(tag, "expected to be the last argument, found: {s}", .{arg});
+        diag.report(tag, "expected there to be no more arguments, found: {s}", .{arg});
         return error.IllegalArgument;
     }
 }
@@ -257,6 +297,8 @@ pub const Diagnostic = struct {
 };
 
 /// enum derived from the `Command` fields
+/// also contains the `SearchOpts` fields (except for `search`)
+/// also contains `--json` from `--env`
 /// used for tagging diagnostic messages
 const Tag = blk: {
     const cmd_fields = @typeInfo(Command).@"union".fields;
@@ -279,9 +321,12 @@ const Tag = blk: {
         idx += 1;
     }
 
+    // since we skipped 'search', we have space for 'json'
+    fields[idx] = .{ .name = "json", .value = idx };
+
     const enum_info: std.builtin.Type.Enum = .{
         .tag_type = u8,
-        .fields = fields[0..idx],
+        .fields = &fields,
         .decls = &.{},
         .is_exhaustive = true,
     };
@@ -371,13 +416,13 @@ test "correctly fails bad --help usage" {
     for (help_flags) |flag| {
         try test_failure(
             &.{ "cs", "my-project", flag },
-            "error parsing 'help' flag: expected to be the first flag, was number 2\n",
+            "error parsing 'help' flag: expected to be the first flag, was in position 2\n",
             error.IllegalArgument,
         );
 
         try test_failure(
             &.{ "cs", flag, "my-project" },
-            "error parsing 'help' flag: expected to be the last argument, found: my-project\n",
+            "error parsing 'help' flag: expected there to be no more arguments, found: my-project\n",
             error.IllegalArgument,
         );
     }
@@ -401,38 +446,76 @@ test "correctly fails bad --version usage" {
     for (version_flags) |flag| {
         try test_failure(
             &.{ "cs", "my-project", flag },
-            "error parsing 'version' flag: expected to be the first flag, was number 2\n",
+            "error parsing 'version' flag: expected to be the first flag, was in position 2\n",
             error.IllegalArgument,
         );
 
         try test_failure(
             &.{ "cs", flag, "my-project" },
-            "error parsing 'version' flag: expected to be the last argument, found: my-project\n",
+            "error parsing 'version' flag: expected there to be no more arguments, found: my-project\n",
             error.IllegalArgument,
         );
     }
 }
 
-test "parse --env correctly" {
+fn test_env(expected_env_fmt: EnvFmt, args: []const []const u8) !void {
     var writer = Writer.Allocating.init(std.testing.allocator);
     defer writer.deinit();
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
-    try std.testing.expectEqual(.env, try parse(&diag, &.{ "cs", "--env" }));
+    const res = try parse(&diag, args);
+
+    try std.testing.expectEqual(expected_env_fmt, res.env);
     try std.testing.expectEqual(0, writer.written().len);
+}
+
+test "parse --env correctly" {
+    try test_env(.txt, &.{ "cs", "--env" });
+    try test_env(.json, &.{ "cs", "--env", "--json" });
+    try test_env(.json, &.{ "cs", "--json", "--env" });
 }
 
 test "correctly fails bad --env usage" {
     try test_failure(
         &.{ "cs", "my-project", "--env" },
-        "error parsing 'env' flag: expected to be the first flag, was number 2\n",
+        "error parsing 'env' flag: expected to be the first flag, was in position 2\n",
         error.IllegalArgument,
     );
 
     try test_failure(
         &.{ "cs", "--env", "my-project" },
-        "error parsing 'env' flag: expected to be the last argument, found: my-project\n",
+        "error parsing 'env' flag: expected '--json', found: my-project\n",
+        error.IllegalArgument,
+    );
+
+    try test_failure(
+        &.{ "cs", "--json" },
+        "error parsing 'json' flag: flag cannot be used without '--env'\n",
+        error.MissingArgument,
+    );
+
+    try test_failure(
+        &.{ "cs", "my-project", "--json" },
+        "error parsing 'json' flag: expected to be the first flag, was in position 2\n",
+        error.IllegalArgument,
+    );
+
+    try test_failure(
+        &.{ "cs", "--json", "my-project" },
+        "error parsing 'json' flag: expected '--env', found: my-project\n",
+        error.IllegalArgument,
+    );
+
+    try test_failure(
+        &.{ "cs", "--env", "--json", "my-project" },
+        "error parsing 'env' flag: expected there to be no more arguments, found: my-project\n",
+        error.IllegalArgument,
+    );
+
+    try test_failure(
+        &.{ "cs", "--json", "--env", "my-project" },
+        "error parsing 'json' flag: expected there to be no more arguments, found: my-project\n",
         error.IllegalArgument,
     );
 }
@@ -488,7 +571,7 @@ test "correctly fails bad --add-paths usage" {
         for (flag_set.flags) |flag| {
             try test_failure(
                 &.{ "cs", "my-project", flag, "a/b/c" },
-                "error parsing '" ++ flag_name ++ "' flag: expected to be the first flag, was number 2\n",
+                "error parsing '" ++ flag_name ++ "' flag: expected to be the first flag, was in position 2\n",
                 error.IllegalArgument,
             );
 
@@ -545,7 +628,7 @@ test "correctly fails bad --shell usage" {
     );
     try test_failure(
         &.{ "cs", "--shell", "zsh", "--json" },
-        "error parsing 'shell' flag: expected to be the last argument, found: --json\n",
+        "error parsing 'shell' flag: expected there to be no more arguments, found: --json\n",
         error.IllegalArgument,
     );
 }

@@ -16,7 +16,8 @@ flags:
 
   -h, --help                       print this message
   -v, -V, --version                print version
-  --env                            print config and environment information
+  --env [--json]                   print config and environment information
+                                     accepts --json flag before or after --env
   -a, --add-paths <path> [...]     update config adding search paths
   -s, --set-paths <path> [...]     update config overriding search paths
   -r, --remove-paths <path> [...]  update config removing search paths

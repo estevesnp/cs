@@ -10,7 +10,7 @@ const cli = @import("cli.zig");
 const SearchAction = cli.SearchAction;
 
 const APP_NAME = "cs";
-const CONFIG_FILE_NAME = "config.json";
+pub const CONFIG_FILE_NAME = "config.json";
 
 const DEFAULT_FZF_PREVIEW = switch (builtin.os.tag) {
     // works in cmd and powershell
@@ -36,13 +36,13 @@ pub const ConfigContext = struct {
     }
 };
 
-pub const OpenConfigError = GetConfigPathError || GetConfigContextError;
+pub const OpenConfigError = GetConfigDirPathError || GetConfigContextError;
 
 /// gets the app's config path, then opens and deserializes it.
 /// creates an empty config file if non exists.
 pub fn openConfig(arena: Allocator) OpenConfigError!ConfigContext {
     var path_buf: [fs.max_path_bytes]u8 = undefined;
-    const path = try getConfigPath(&path_buf);
+    const path = try getConfigDirPath(&path_buf);
 
     return openConfigFromPath(arena, path);
 }
@@ -87,9 +87,9 @@ pub fn openConfigFromPath(arena: Allocator, config_path: []const u8) GetConfigCo
     };
 }
 
-const GetConfigPathError = error{ BufTooSmall, HomeNotFound };
+const GetConfigDirPathError = error{ BufTooSmall, HomeNotFound };
 
-pub fn getConfigPath(path_buf: []u8) GetConfigPathError![]u8 {
+pub fn getConfigDirPath(path_buf: []u8) GetConfigDirPathError![]u8 {
     switch (builtin.os.tag) {
         .windows => {
             const key = unicode.wtf8ToWtf16LeStringLiteral("APPDATA");
