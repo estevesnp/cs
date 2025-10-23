@@ -240,14 +240,7 @@ fn shellIntegration(arena: Allocator, shell: ?cli.Shell) !void {
     };
 
     const csd_integration = switch (shell_tag) {
-        .zsh, .bash =>
-        \\csd() {
-        \\    local cspath
-        \\    cspath=$(cs --print "$1") || return
-        \\    [ -n "$cspath" ] || return
-        \\    builtin cd -- "$cspath" || return
-        \\}
-        \\
+        .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
     };
 
     try fs.File.stdout().writeAll(csd_integration);
