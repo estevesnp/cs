@@ -343,6 +343,18 @@ fn searchProject(opts: struct {
     path_buf: []u8,
     reporter: *Writer,
 }) SearchError!?[]const u8 {
+    const project_set = try walk.searchProjects(opts.arena, opts.roots, .{});
+    const projects = project_set.keys();
+
+    if (projects.len == 0) {
+        return error.NoProjectsFound;
+    }
+
+    if (matchProject(opts.project_query, projects)) |matched_path| {
+        // TODO: should we fill the path_buf and return it for consistency?
+        return matched_path;
+    }
+
     var fzf_proc = try spawnFzf(opts.arena, opts.project_query, opts.preview);
     errdefer _ = fzf_proc.kill() catch {};
 
@@ -350,35 +362,15 @@ fn searchProject(opts: struct {
     var fzf_bw = fzf_proc.stdin.?.writer(&buf);
     const fzf_stdin = &fzf_bw.interface;
 
-    // needed since the compiler creates a new enum when building `options`
-    const flush_after = @field(walk.FlushAfter, @tagName(options.fzf_flush_after));
-
-    const project_set = walk.searchProjects(opts.arena, opts.roots, .{
-        .writer = fzf_stdin,
-        .reporter = opts.reporter,
-        .flush_after = flush_after,
-    }) catch |err| switch (err) {
-        // most likely failed due to selecting a project before finishing search
-        error.WriteFailed => return extractProject(&fzf_proc, opts.path_buf),
-        else => return err,
-    };
-
-    const projects = project_set.keys();
-
-    if (projects.len == 0) {
-        _ = fzf_proc.kill() catch {};
-        return error.NoProjectsFound;
+    for (projects) |project| {
+        try fzf_stdin.writeAll(project);
+        try fzf_stdin.writeByte('\n');
     }
+
+    try fzf_stdin.flush();
 
     fzf_proc.stdin.?.close();
     fzf_proc.stdin = null;
-
-    if (matchProject(opts.project_query, projects)) |matched_path| {
-        // found singular exact project match, abort fzf and return
-        _ = fzf_proc.kill() catch {};
-        // TODO: should we fill the path_buf and return it for consistency?
-        return matched_path;
-    }
 
     return extractProject(&fzf_proc, opts.path_buf);
 }
