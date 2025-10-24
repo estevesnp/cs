@@ -303,6 +303,18 @@ fn searchProject(
     preview: []const u8,
     path_buf: []u8,
 ) SearchError!?[]const u8 {
+    const project_set = try walk.searchProjects(arena, roots, .{});
+    const projects = project_set.keys();
+
+    if (projects.len == 0) {
+        return error.NoProjectsFound;
+    }
+
+    if (matchProject(project_query, projects)) |matched_path| {
+        // TODO: should we fill the path_buf and return it for consistency?
+        return matched_path;
+    }
+
     var fzf_proc = try spawnFzf(arena, project_query, preview);
     errdefer _ = fzf_proc.kill() catch {};
 
@@ -310,34 +322,15 @@ fn searchProject(
     var fzf_bw = fzf_proc.stdin.?.writer(&buf);
     const fzf_stdin = &fzf_bw.interface;
 
-    // needed since the compiler creates a new enum when building `options`
-    const flush_after = @field(walk.FlushAfter, @tagName(options.fzf_flush_after));
-
-    const project_set = walk.searchProjects(arena, roots, .{
-        .writer = fzf_stdin,
-        .flush_after = flush_after,
-    }) catch |err| switch (err) {
-        // most likely failed due to selecting a project before finishing search
-        error.WriteFailed => return extractProject(&fzf_proc, path_buf),
-        else => return err,
-    };
-
-    const projects = project_set.keys();
-
-    if (projects.len == 0) {
-        _ = fzf_proc.kill() catch {};
-        return error.NoProjectsFound;
+    for (projects) |project| {
+        try fzf_stdin.writeAll(project);
+        try fzf_stdin.writeByte('\n');
     }
+
+    try fzf_stdin.flush();
 
     fzf_proc.stdin.?.close();
     fzf_proc.stdin = null;
-
-    if (matchProject(project_query, projects)) |matched_path| {
-        // found singular exact project match, abort fzf and return
-        _ = fzf_proc.kill() catch {};
-        // TODO: should we fill the path_buf and return it for consistency?
-        return matched_path;
-    }
 
     return extractProject(&fzf_proc, path_buf);
 }
