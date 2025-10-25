@@ -172,6 +172,7 @@ fn searchDir(gpa: Allocator, ctx: *Context, dir: fs.Dir, depth: usize) SearchErr
     while (try iter.next()) |inner| {
         if (anyEql(ctx.project_markers, inner.name)) {
             const path_name = try fs.path.join(gpa, ctx.path_stack.items);
+            errdefer gpa.free(path_name);
 
             const gop = try ctx.projects.getOrPut(gpa, path_name);
 
@@ -192,7 +193,11 @@ fn searchDir(gpa: Allocator, ctx: *Context, dir: fs.Dir, depth: usize) SearchErr
         }
 
         if (inner.kind != .directory) continue;
-        try ctx.to_check_stack.append(gpa, try gpa.dupe(u8, inner.name));
+
+        const dir_name = try gpa.dupe(u8, inner.name);
+        errdefer gpa.free(dir_name);
+
+        try ctx.to_check_stack.append(gpa, dir_name);
     }
 
     const end_idx = ctx.to_check_stack.items.len;
@@ -233,6 +238,7 @@ test "searchProjects returns correct projects" {
 
     try test_assertProjects(
         gpa,
+        gpa,
         &.{
             &.{base_path},
         },
@@ -246,6 +252,7 @@ test "searchProjects returns correct projects" {
     );
 
     try test_assertProjects(
+        gpa,
         gpa,
         &.{
             &.{base_path},
@@ -264,6 +271,7 @@ test "searchProjects returns correct projects" {
 
     try test_assertProjects(
         gpa,
+        gpa,
         &.{
             &.{ base_path, "root-1" },
         },
@@ -275,6 +283,7 @@ test "searchProjects returns correct projects" {
     );
 
     try test_assertProjects(
+        gpa,
         gpa,
         &.{
             &.{ base_path, "root-2" },
@@ -288,6 +297,7 @@ test "searchProjects returns correct projects" {
     );
 
     try test_assertProjects(
+        gpa,
         gpa,
         &.{
             &.{ base_path, "root-4" },
@@ -296,6 +306,7 @@ test "searchProjects returns correct projects" {
     );
 
     try test_assertProjects(
+        gpa,
         gpa,
         &.{
             &.{ base_path, "root-2" },
@@ -308,10 +319,10 @@ test "searchProjects returns correct projects" {
 }
 
 test "searchProjects doesn't leak memory" {
-    // currently leaks if 4th allocation fails
-    if (true) return error.SkipZigTest;
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
 
-    const gpa = std.heap.smp_allocator;
+    const gpa = debug_allocator.allocator();
 
     var tmp_dir_state = testing.tmpDir(.{});
     defer tmp_dir_state.cleanup();
@@ -327,6 +338,7 @@ test "searchProjects doesn't leak memory" {
         testing.allocator,
         test_assertProjects,
         .{
+            gpa,
             &.{
                 &.{base_path},
             },
@@ -405,11 +417,12 @@ test "searchProjects reports properly on non-existing roots" {
 }
 
 fn test_assertProjects(
-    gpa: Allocator,
+    testing_allocator: Allocator,
+    util_allocator: Allocator,
     root_paths: []const []const []const u8,
     expected_projects_paths: []const []const []const u8,
 ) !void {
-    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    var arena_state: std.heap.ArenaAllocator = .init(util_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -426,11 +439,11 @@ fn test_assertProjects(
 
     var alloc_writer: Writer.Allocating = .init(arena);
 
-    var project_set = try searchProjects(gpa, roots, .{
+    var project_set = try searchProjects(testing_allocator, roots, .{
         .writer = &alloc_writer.writer,
         .flush_after = .end,
     });
-    defer freeProjects(gpa, &project_set);
+    defer freeProjects(testing_allocator, &project_set);
 
     const returned_projects = project_set.keys();
 
