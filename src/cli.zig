@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
+const testing = std.testing;
 const Writer = std.Io.Writer;
 const assert = std.debug.assert;
 
@@ -335,53 +336,53 @@ const Tag = blk: {
 };
 
 test "ref all decls" {
-    std.testing.refAllDeclsRecursive(@This());
+    testing.refAllDeclsRecursive(@This());
 }
 
 test ArgIterator {
     {
         var iter: ArgIterator = .init(&.{ "a", "b", "c" });
 
-        try std.testing.expectEqualStrings("a", iter.peek().?);
-        try std.testing.expectEqualStrings("a", iter.peek().?);
-        try std.testing.expectEqualStrings("a", iter.next().?);
+        try testing.expectEqualStrings("a", iter.peek().?);
+        try testing.expectEqualStrings("a", iter.peek().?);
+        try testing.expectEqualStrings("a", iter.next().?);
 
-        try std.testing.expectEqualStrings("b", iter.peek().?);
-        try std.testing.expectEqualStrings("b", iter.peek().?);
-        try std.testing.expectEqualStrings("b", iter.next().?);
+        try testing.expectEqualStrings("b", iter.peek().?);
+        try testing.expectEqualStrings("b", iter.peek().?);
+        try testing.expectEqualStrings("b", iter.next().?);
 
-        try std.testing.expectEqualStrings("c", iter.peek().?);
-        try std.testing.expectEqualStrings("c", iter.peek().?);
-        try std.testing.expectEqualStrings("c", iter.next().?);
+        try testing.expectEqualStrings("c", iter.peek().?);
+        try testing.expectEqualStrings("c", iter.peek().?);
+        try testing.expectEqualStrings("c", iter.next().?);
 
-        try std.testing.expectEqual(null, iter.peek());
-        try std.testing.expectEqual(null, iter.peek());
-        try std.testing.expectEqual(null, iter.next());
-        try std.testing.expectEqual(null, iter.peek());
-        try std.testing.expectEqual(null, iter.peek());
-        try std.testing.expectEqual(null, iter.next());
+        try testing.expectEqual(null, iter.peek());
+        try testing.expectEqual(null, iter.peek());
+        try testing.expectEqual(null, iter.next());
+        try testing.expectEqual(null, iter.peek());
+        try testing.expectEqual(null, iter.peek());
+        try testing.expectEqual(null, iter.next());
     }
 
     {
         var iter: ArgIterator = .init(&.{});
 
-        try std.testing.expectEqual(null, iter.peek());
-        try std.testing.expectEqual(null, iter.peek());
-        try std.testing.expectEqual(null, iter.next());
-        try std.testing.expectEqual(null, iter.peek());
-        try std.testing.expectEqual(null, iter.peek());
-        try std.testing.expectEqual(null, iter.next());
+        try testing.expectEqual(null, iter.peek());
+        try testing.expectEqual(null, iter.peek());
+        try testing.expectEqual(null, iter.next());
+        try testing.expectEqual(null, iter.peek());
+        try testing.expectEqual(null, iter.peek());
+        try testing.expectEqual(null, iter.next());
     }
 }
 
 fn test_failure(args: []const []const u8, comptime expected_message: []const u8, expected_error: ArgParseError) !void {
-    var writer = Writer.Allocating.init(std.testing.allocator);
+    var writer: Writer.Allocating = .init(testing.allocator);
     defer writer.deinit();
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
-    try std.testing.expectError(expected_error, parse(&diag, args));
-    try std.testing.expectEqualStrings(expected_message, writer.written());
+    try testing.expectError(expected_error, parse(&diag, args));
+    try testing.expectEqualStrings(expected_message, writer.written());
 }
 
 test "correctly fails bad flag" {
@@ -399,15 +400,15 @@ test "correctly fails bad flag" {
 }
 
 test "parse --help correctly" {
-    var writer = Writer.Allocating.init(std.testing.allocator);
+    var writer: Writer.Allocating = .init(testing.allocator);
     defer writer.deinit();
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
     const help_flags: []const []const u8 = &.{ "--help", "-h" };
     for (help_flags) |flag| {
-        try std.testing.expectEqual(.help, try parse(&diag, &.{ "cs", flag }));
-        try std.testing.expectEqual(0, writer.written().len);
+        try testing.expectEqual(.help, try parse(&diag, &.{ "cs", flag }));
+        try testing.expectEqual(0, writer.written().len);
     }
 }
 
@@ -429,15 +430,15 @@ test "correctly fails bad --help usage" {
 }
 
 test "parse --version correctly" {
-    var writer = Writer.Allocating.init(std.testing.allocator);
+    var writer: Writer.Allocating = .init(testing.allocator);
     defer writer.deinit();
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
     const version_flags: []const []const u8 = &.{ "--version", "-v", "-V" };
     for (version_flags) |flag| {
-        try std.testing.expectEqual(.version, try parse(&diag, &.{ "cs", flag }));
-        try std.testing.expectEqual(0, writer.written().len);
+        try testing.expectEqual(.version, try parse(&diag, &.{ "cs", flag }));
+        try testing.expectEqual(0, writer.written().len);
     }
 }
 
@@ -459,15 +460,15 @@ test "correctly fails bad --version usage" {
 }
 
 fn test_env(expected_env_fmt: EnvFmt, args: []const []const u8) !void {
-    var writer = Writer.Allocating.init(std.testing.allocator);
+    var writer: Writer.Allocating = .init(testing.allocator);
     defer writer.deinit();
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
     const res = try parse(&diag, args);
 
-    try std.testing.expectEqual(expected_env_fmt, res.env);
-    try std.testing.expectEqual(0, writer.written().len);
+    try testing.expectEqual(expected_env_fmt, res.env);
+    try testing.expectEqual(0, writer.written().len);
 }
 
 test "parse --env correctly" {
@@ -525,7 +526,7 @@ fn test_paths(
     args: []const []const u8,
     expected_paths: []const []const u8,
 ) !void {
-    var writer = Writer.Allocating.init(std.testing.allocator);
+    var writer: Writer.Allocating = .init(testing.allocator);
     defer writer.deinit();
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
@@ -534,11 +535,11 @@ fn test_paths(
 
     const paths = @field(result, @tagName(tag));
 
-    try std.testing.expectEqual(expected_paths.len, paths.len);
+    try testing.expectEqual(expected_paths.len, paths.len);
     for (expected_paths, paths) |expected_path, path| {
-        try std.testing.expectEqualStrings(expected_path, path);
+        try testing.expectEqualStrings(expected_path, path);
     }
-    try std.testing.expectEqual(0, writer.written().len);
+    try testing.expectEqual(0, writer.written().len);
 }
 
 const PathFlagSet = struct {
@@ -603,15 +604,15 @@ test "correctly fails bad --add-paths usage" {
 }
 
 fn test_shell(shell: ?Shell, args: []const []const u8) !void {
-    var writer = Writer.Allocating.init(std.testing.allocator);
+    var writer: Writer.Allocating = .init(testing.allocator);
     defer writer.deinit();
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
     const result = try parse(&diag, args);
 
-    try std.testing.expectEqual(shell, result.shell);
-    try std.testing.expectEqual(0, writer.written().len);
+    try testing.expectEqual(shell, result.shell);
+    try testing.expectEqual(0, writer.written().len);
 }
 
 test "parse --shell correctly " {
@@ -634,7 +635,7 @@ test "correctly fails bad --shell usage" {
 }
 
 fn test_searchCommand(args: []const []const u8, expected_search_opts: SearchOpts) !void {
-    var writer = Writer.Allocating.init(std.testing.allocator);
+    var writer: Writer.Allocating = .init(testing.allocator);
     defer writer.deinit();
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
@@ -643,15 +644,15 @@ fn test_searchCommand(args: []const []const u8, expected_search_opts: SearchOpts
     const search_opts = result.search;
 
     if (expected_search_opts.preview) |preview| {
-        try std.testing.expectEqualStrings(preview, search_opts.preview.?);
+        try testing.expectEqualStrings(preview, search_opts.preview.?);
     } else {
-        try std.testing.expectEqual(null, search_opts.preview);
+        try testing.expectEqual(null, search_opts.preview);
     }
 
-    try std.testing.expectEqual(expected_search_opts.action, search_opts.action);
-    try std.testing.expectEqualStrings(expected_search_opts.project, search_opts.project);
+    try testing.expectEqual(expected_search_opts.action, search_opts.action);
+    try testing.expectEqualStrings(expected_search_opts.project, search_opts.project);
 
-    try std.testing.expectEqual(0, writer.written().len);
+    try testing.expectEqual(0, writer.written().len);
 }
 
 test "parse search command correctly" {

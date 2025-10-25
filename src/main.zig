@@ -75,9 +75,10 @@ pub fn main() !void {
     const arena = arena_state.allocator();
 
     var stderr_buf: [1024]u8 = undefined;
-    var stderr = File.stderr().writer(&stderr_buf);
+    var stderr_writer = File.stderr().writer(&stderr_buf);
+    const stderr = &stderr_writer.interface;
 
-    const diag: cli.Diagnostic = .{ .writer = &stderr.interface };
+    const diag: cli.Diagnostic = .{ .writer = stderr };
 
     const args = try process.argsAlloc(arena);
 
@@ -87,11 +88,11 @@ pub fn main() !void {
         .help => try help(),
         .version => try version(),
         .env => |e| try env(arena, e),
-        .@"add-paths" => |paths| try addPaths(arena, paths),
-        .@"set-paths" => |paths| try setPaths(arena, paths),
-        .@"remove-paths" => |paths| try removePaths(arena, paths),
+        .@"add-paths" => |paths| try addPaths(arena, .{ .writer = stderr }, paths),
+        .@"set-paths" => |paths| try setPaths(arena, .{ .writer = stderr }, paths),
+        .@"remove-paths" => |paths| try removePaths(arena, .{ .writer = stderr }, paths),
         .shell => |shell| try shellIntegration(arena, shell),
-        .search => |opts| try search(arena, opts),
+        .search => |opts| try search(arena, stderr, opts),
     }
 }
 
@@ -161,7 +162,16 @@ fn printEnvJson(out: *Writer, cfg_path: []const u8, roots: []const []const u8) !
     try std.json.Stringify.value(schema, .{ .whitespace = .indent_2 }, out);
 }
 
-fn addPaths(arena: Allocator, paths: []const []const u8) !void {
+const Reporter = struct {
+    writer: *Writer,
+
+    fn report(self: Reporter, comptime fmt: []const u8, args: anytype) void {
+        self.writer.print(fmt ++ "\n", args) catch {};
+        self.writer.flush() catch {};
+    }
+};
+
+fn addPaths(arena: Allocator, reporter: Reporter, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
     var cfg_context = try config.openConfig(arena);
@@ -175,8 +185,17 @@ fn addPaths(arena: Allocator, paths: []const []const u8) !void {
     const cwd = fs.cwd();
     for (paths) |path| {
         if (path.len == 0) continue;
-        const real_path = try cwd.realpathAlloc(arena, path);
-        try path_set.put(arena, real_path, {});
+        const real_path = cwd.realpathAlloc(arena, path) catch |err| switch (err) {
+            error.FileNotFound => {
+                reporter.report("{s} not found", .{path});
+                continue;
+            },
+            else => |e| return e,
+        };
+        const gop = try path_set.getOrPut(arena, real_path);
+        if (gop.found_existing) {
+            reporter.report("root {s} already exists", .{real_path});
+        }
     }
 
     cfg.project_roots = path_set.keys();
@@ -184,7 +203,7 @@ fn addPaths(arena: Allocator, paths: []const []const u8) !void {
     try config.updateConfig(cfg_context.config_file, cfg);
 }
 
-fn setPaths(arena: Allocator, paths: []const []const u8) !void {
+fn setPaths(arena: Allocator, reporter: Reporter, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
     var cfg_context = try config.openConfig(arena);
@@ -198,8 +217,23 @@ fn setPaths(arena: Allocator, paths: []const []const u8) !void {
     const cwd = fs.cwd();
     for (paths) |path| {
         if (path.len == 0) continue;
-        const real_path = try cwd.realpathAlloc(arena, path);
-        try path_set.put(arena, real_path, {});
+        const real_path = cwd.realpathAlloc(arena, path) catch |err| switch (err) {
+            error.FileNotFound => {
+                reporter.report("{s} not found", .{path});
+                continue;
+            },
+            else => |e| return e,
+        };
+
+        const gop = try path_set.getOrPut(arena, real_path);
+        if (gop.found_existing) {
+            reporter.report("root {s} was already added", .{real_path});
+        }
+    }
+
+    if (path_set.count() == 0) {
+        reporter.report("no roots were added, aborting", .{});
+        return;
     }
 
     cfg.project_roots = path_set.keys();
@@ -207,7 +241,7 @@ fn setPaths(arena: Allocator, paths: []const []const u8) !void {
     try config.updateConfig(cfg_context.config_file, cfg);
 }
 
-fn removePaths(arena: Allocator, paths: []const []const u8) !void {
+fn removePaths(arena: Allocator, reporter: Reporter, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
     var cfg_context = try config.openConfig(arena);
@@ -218,12 +252,16 @@ fn removePaths(arena: Allocator, paths: []const []const u8) !void {
     var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.project_roots, &.{});
     defer path_set.deinit(arena);
 
-    const cwd = fs.cwd();
-    var path_buf: [fs.max_path_bytes]u8 = undefined;
+    const cwd = try process.getCwdAlloc(arena);
     for (paths) |path| {
         if (path.len == 0) continue;
-        const real_path = try cwd.realpath(path, &path_buf);
-        _ = path_set.swapRemove(real_path);
+
+        const resolved = try fs.path.resolve(arena, &.{ cwd, path });
+        const removed = path_set.orderedRemove(resolved);
+
+        if (!removed) {
+            reporter.report("root {s} not configured", .{resolved});
+        }
     }
 
     cfg.project_roots = path_set.keys();
@@ -243,10 +281,10 @@ fn shellIntegration(arena: Allocator, shell: ?cli.Shell) !void {
         .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
     };
 
-    try fs.File.stdout().writeAll(csd_integration);
+    try File.stdout().writeAll(csd_integration);
 }
 
-fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
+fn search(arena: Allocator, reporter: *Writer, search_opts: cli.SearchOpts) !void {
     var cfg_context = try config.openConfig(arena);
     cfg_context.deinit();
 
@@ -260,13 +298,14 @@ fn search(arena: Allocator, search_opts: cli.SearchOpts) !void {
 
     // +1 for the new line
     var path_buf: [fs.max_path_bytes + 1]u8 = undefined;
-    const path = searchProject(
-        arena,
-        cfg.project_roots,
-        search_opts.project,
-        preview,
-        &path_buf,
-    ) catch |err| switch (err) {
+    const path = searchProject(.{
+        .arena = arena,
+        .roots = cfg.project_roots,
+        .project_query = search_opts.project,
+        .preview = preview,
+        .path_buf = &path_buf,
+        .reporter = reporter,
+    }) catch |err| switch (err) {
         error.FzfNotFound => exit("fzf binary not found in path\n"),
         error.NoProjectsFound => exit("no projects found\n"),
         else => return err,
@@ -296,14 +335,15 @@ const SearchError = ExtractError || walk.SearchError || process.Child.SpawnError
     error{NoProjectsFound};
 
 /// searches for project. returned slice may or may not be the buffer passed in.
-fn searchProject(
+fn searchProject(opts: struct {
     arena: Allocator,
     roots: []const []const u8,
     project_query: []const u8,
     preview: []const u8,
     path_buf: []u8,
-) SearchError!?[]const u8 {
-    var fzf_proc = try spawnFzf(arena, project_query, preview);
+    reporter: *Writer,
+}) SearchError!?[]const u8 {
+    var fzf_proc = try spawnFzf(opts.arena, opts.project_query, opts.preview);
     errdefer _ = fzf_proc.kill() catch {};
 
     var buf: [256]u8 = undefined;
@@ -313,12 +353,13 @@ fn searchProject(
     // needed since the compiler creates a new enum when building `options`
     const flush_after = @field(walk.FlushAfter, @tagName(options.fzf_flush_after));
 
-    const project_set = walk.searchProjects(arena, roots, .{
+    const project_set = walk.searchProjects(opts.arena, opts.roots, .{
         .writer = fzf_stdin,
+        .reporter = opts.reporter,
         .flush_after = flush_after,
     }) catch |err| switch (err) {
         // most likely failed due to selecting a project before finishing search
-        error.WriteFailed => return extractProject(&fzf_proc, path_buf),
+        error.WriteFailed => return extractProject(&fzf_proc, opts.path_buf),
         else => return err,
     };
 
@@ -332,14 +373,14 @@ fn searchProject(
     fzf_proc.stdin.?.close();
     fzf_proc.stdin = null;
 
-    if (matchProject(project_query, projects)) |matched_path| {
+    if (matchProject(opts.project_query, projects)) |matched_path| {
         // found singular exact project match, abort fzf and return
         _ = fzf_proc.kill() catch {};
         // TODO: should we fill the path_buf and return it for consistency?
         return matched_path;
     }
 
-    return extractProject(&fzf_proc, path_buf);
+    return extractProject(&fzf_proc, opts.path_buf);
 }
 
 const ExtractError = Reader.DelimiterError || process.Child.WaitError || error{

@@ -22,22 +22,11 @@ pub const FlushAfter = enum {
     project,
 };
 
-pub const ScanOpts = struct {
-    /// writer to report to
-    writer: *Writer,
-    /// when to flush the writer
-    flush_after: FlushAfter = .root,
-    /// max depth for searching for projects
-    max_depth: usize = 5,
-    /// marker to identify if a project exists
-    project_markers: []const []const u8 = default_project_markers,
-    /// byte for separating projects in writer
-    separator_byte: u8 = '\n',
-};
-
 pub const SearchOpts = struct {
-    /// optional writer to report to
+    /// optional writer to write paths to
     writer: ?*Writer = null,
+    /// optional writer to report to
+    reporter: ?*Writer = null,
     /// when to flush the writer (if it exists)
     flush_after: FlushAfter = .never,
     /// max depth for searching for projects
@@ -46,11 +35,6 @@ pub const SearchOpts = struct {
     project_markers: []const []const u8 = default_project_markers,
     /// byte for separating projects in writer
     separator_byte: u8 = '\n',
-};
-
-const ContextOptions = union(enum) {
-    search_opts: SearchOpts,
-    scan_opts: ScanOpts,
 };
 
 const Context = struct {
@@ -63,22 +47,22 @@ const Context = struct {
     max_depth: usize,
     project_markers: []const []const u8,
     writer: ?*Writer,
+    reporter: ?*Writer,
     flush_after: FlushAfter,
     separator_byte: u8,
 
-    fn init(ctx_opts: ContextOptions) Context {
-        return switch (ctx_opts) {
-            inline else => |opts| .{
-                .max_depth = opts.max_depth,
-                .writer = opts.writer,
-                .project_markers = opts.project_markers,
-                .flush_after = opts.flush_after,
-                .separator_byte = opts.separator_byte,
-            },
+    fn init(opts: SearchOpts) Context {
+        return .{
+            .max_depth = opts.max_depth,
+            .writer = opts.writer,
+            .reporter = opts.reporter,
+            .project_markers = opts.project_markers,
+            .flush_after = opts.flush_after,
+            .separator_byte = opts.separator_byte,
         };
     }
 
-    fn initWithRoot(gpa: Allocator, root_path: []const u8, opts: ContextOptions) !Context {
+    fn initWithRoot(gpa: Allocator, root_path: []const u8, opts: SearchOpts) !Context {
         var ctx: Context = .init(opts);
         try ctx.path_stack.append(gpa, root_path);
 
@@ -104,6 +88,13 @@ const Context = struct {
         }
     }
 
+    fn report(self: *Context, comptime fmt: []const u8, args: anytype) void {
+        if (self.reporter) |reporter| {
+            reporter.print(fmt ++ "\n", args) catch {};
+            reporter.flush() catch {};
+        }
+    }
+
     fn deinit(self: *Context, gpa: Allocator) void {
         // items in this stack are never owned
         self.path_stack.deinit(gpa);
@@ -120,19 +111,6 @@ const Context = struct {
     }
 };
 
-/// scan for projects and write their full path to provided writer.
-/// return number of projects found
-pub fn scanProjects(
-    gpa: Allocator,
-    root_paths: []const []const u8,
-    opts: ScanOpts,
-) SearchError!usize {
-    var ctx = try search(gpa, root_paths, .{ .scan_opts = opts });
-    defer ctx.deinit(gpa);
-
-    return ctx.projects.count();
-}
-
 /// search for projects and return their full path as a set.
 /// if no arena is used, caller must free the return object. check `freeProjects`
 pub fn searchProjects(
@@ -140,7 +118,7 @@ pub fn searchProjects(
     root_paths: []const []const u8,
     opts: SearchOpts,
 ) SearchError!std.StringArrayHashMapUnmanaged(void) {
-    var ctx = try search(gpa, root_paths, .{ .search_opts = opts });
+    var ctx = try search(gpa, root_paths, opts);
     defer ctx.deinit(gpa);
 
     return ctx.projects.move();
@@ -154,18 +132,23 @@ pub fn freeProjects(gpa: Allocator, projects: *std.StringArrayHashMapUnmanaged(v
     projects.deinit(gpa);
 }
 
-fn search(gpa: Allocator, root_paths: []const []const u8, opts: ContextOptions) SearchError!Context {
+fn search(gpa: Allocator, root_paths: []const []const u8, opts: SearchOpts) SearchError!Context {
     assert(root_paths.len > 0);
 
     var ctx: Context = .init(opts);
     errdefer ctx.deinit(gpa);
 
     for (root_paths) |root_path| {
-        try ctx.changeRoot(gpa, root_path);
-
-        var root_dir = try fs.openDirAbsolute(root_path, .{ .iterate = true });
+        var root_dir = fs.openDirAbsolute(root_path, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => {
+                ctx.report("root {s} not found, skipping", .{root_path});
+                continue;
+            },
+            else => |e| return e,
+        };
         defer root_dir.close();
 
+        try ctx.changeRoot(gpa, root_path);
         try searchDir(gpa, &ctx, root_dir, 0);
 
         if (ctx.flush_after == .root) {
@@ -324,7 +307,42 @@ test "searchProjects returns correct projects" {
     );
 }
 
+test "searchProjects doesn't leak memory" {
+    // currently leaks if 4th allocation fails
+    if (true) return error.SkipZigTest;
+
+    const gpa = std.heap.smp_allocator;
+
+    var tmp_dir_state = testing.tmpDir(.{});
+    defer tmp_dir_state.cleanup();
+
+    const tmp_dir = tmp_dir_state.dir;
+
+    const base_path = try tmp_dir.realpathAlloc(gpa, ".");
+    defer gpa.free(base_path);
+
+    try test_mountFilesystem(gpa, tmp_dir);
+
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        test_assertProjects,
+        .{
+            &.{
+                &.{base_path},
+            },
+            &.{
+                &.{ base_path, "root-1", "nest-1-1", "proj-1-1-1" },
+                &.{ base_path, "root-1", "proj-1-1" },
+                &.{ base_path, "root-1", "proj-1-2" },
+                &.{ base_path, "root-2", "proj-2-1" },
+                &.{ base_path, "root-3" },
+            },
+        },
+    );
+}
+
 test "searchProjects doesn't leak memory on bad path" {
+    if (true) return error.SkipZigTest;
     const gpa = testing.allocator;
 
     var tmp_dir_state = testing.tmpDir(.{});
@@ -343,6 +361,47 @@ test "searchProjects doesn't leak memory on bad path" {
 
     try testing.expectError(error.FileNotFound, searchProjects(gpa, root_paths, .{}));
     try testing.expectError(error.OutOfMemory, searchProjects(testing.failing_allocator, root_paths, .{}));
+}
+
+test "searchProjects reports properly on non-existing roots" {
+    const gpa = testing.allocator;
+
+    var tmp_dir_state = testing.tmpDir(.{});
+    defer tmp_dir_state.cleanup();
+
+    const tmp_dir = tmp_dir_state.dir;
+
+    const base_path = try tmp_dir.realpathAlloc(gpa, ".");
+    defer gpa.free(base_path);
+
+    try test_mountFilesystem(gpa, tmp_dir);
+
+    const root_paths: []const []const u8 = &.{
+        try fs.path.join(gpa, &.{ base_path, "root-2" }),
+        try fs.path.join(gpa, &.{ base_path, "root-4" }),
+        try fs.path.join(gpa, &.{ base_path, "non-existing-dir" }),
+    };
+    defer for (root_paths) |p| gpa.free(p);
+
+    const expected_repo = try fs.path.join(gpa, &.{ base_path, "root-2", "proj-2-1" });
+    defer gpa.free(expected_repo);
+
+    const expected_reported_message = try std.fmt.allocPrint(
+        gpa,
+        "root {s} not found, skipping\n",
+        .{root_paths[2]},
+    );
+    defer gpa.free(expected_reported_message);
+
+    var allocating_writer: Writer.Allocating = .init(gpa);
+    defer allocating_writer.deinit();
+
+    var projects = try searchProjects(gpa, root_paths, .{ .reporter = &allocating_writer.writer });
+    defer freeProjects(gpa, &projects);
+
+    try testing.expectEqual(1, projects.count());
+    try testing.expectEqualStrings(expected_repo, projects.keys()[0]);
+    try testing.expectEqualStrings(expected_reported_message, allocating_writer.written());
 }
 
 fn test_assertProjects(
@@ -365,7 +424,7 @@ fn test_assertProjects(
         proj.* = try fs.path.join(arena, path);
     }
 
-    var alloc_writer = Writer.Allocating.init(arena);
+    var alloc_writer: Writer.Allocating = .init(arena);
 
     var project_set = try searchProjects(gpa, roots, .{
         .writer = &alloc_writer.writer,
@@ -390,21 +449,32 @@ fn test_assertProjects(
     }
 
     try testing.expectEqual(expected_projects.len, returned_projects.len);
+    try testing.expectEqual(expected_projects.len, written_projects.len);
 
+    var returned_not_found = false;
+    var written_not_found = false;
     for (expected_projects) |expected| {
         if (!anyEql(returned_projects, expected)) {
-            std.debug.print("expected '{s}' not found\n", .{expected});
-            std.debug.print("actual returned projects:\n", .{});
-            for (returned_projects) |p| std.debug.print("  '{s}'\n", .{p});
-            return error.NoMatch;
+            returned_not_found = true;
+            std.debug.print("expected returned '{s}' not found\n", .{expected});
         }
         if (!anyEql(written_projects, expected)) {
-            std.debug.print("expected '{s}' not found\n", .{expected});
-            std.debug.print("actual written projects:\n", .{});
-            for (written_projects) |p| std.debug.print("  '{s}'\n", .{p});
-            return error.NoMatch;
+            written_not_found = true;
+            std.debug.print("expected written '{s}' not found\n", .{expected});
         }
     }
+
+    if (returned_not_found) {
+        std.debug.print("actual returned projects:\n", .{});
+        for (returned_projects) |p| std.debug.print("  '{s}'\n", .{p});
+    }
+
+    if (written_not_found) {
+        std.debug.print("actual written projects:\n", .{});
+        for (written_projects) |p| std.debug.print("  '{s}'\n", .{p});
+    }
+
+    if (returned_not_found or written_not_found) return error.NoMatch;
 }
 
 const TestFile = struct {

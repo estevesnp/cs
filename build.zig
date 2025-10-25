@@ -75,7 +75,9 @@ pub fn build(b: *std.Build) !void {
     }
 
     { // test
+        const filters = b.option([]const []const u8, "test-filter", "Test filters") orelse &.{};
         const exe_tests = b.addTest(.{
+            .filters = filters,
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/tests.zig"),
                 .target = target,

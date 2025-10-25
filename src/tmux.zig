@@ -1,6 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const process = std.process;
+const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
@@ -143,5 +144,5 @@ test normalizeBasename {
 
 fn test_normalizeBasename(input: []const u8, expected: []const u8) !void {
     var buf: [256]u8 = undefined;
-    try std.testing.expectEqualStrings(expected, normalizeBasename(input, &buf));
+    try testing.expectEqualStrings(expected, normalizeBasename(input, &buf));
 }

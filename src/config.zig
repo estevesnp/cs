@@ -4,6 +4,7 @@ const fs = std.fs;
 const process = std.process;
 const unicode = std.unicode;
 const json = std.json;
+const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 const cli = @import("cli.zig");
@@ -150,37 +151,37 @@ fn joinPaths(buf: []u8, sub_paths: []const []const u8) error{BufTooSmall}![]u8 {
 }
 
 test "ref all decls" {
-    std.testing.refAllDeclsRecursive(@This());
+    testing.refAllDeclsRecursive(@This());
 }
 
 test joinPaths {
     {
         var buf: [fs.max_path_bytes]u8 = undefined;
-        try std.testing.expectEqualStrings("abc/def/ghi", try joinPaths(&buf, &.{ "abc", "def", "ghi" }));
+        try testing.expectEqualStrings("abc/def/ghi", try joinPaths(&buf, &.{ "abc", "def", "ghi" }));
     }
     {
         var buf: [fs.max_path_bytes]u8 = undefined;
-        try std.testing.expectEqualStrings("abc/def", try joinPaths(&buf, &.{ "abc", "def" }));
+        try testing.expectEqualStrings("abc/def", try joinPaths(&buf, &.{ "abc", "def" }));
     }
     {
         var buf: [fs.max_path_bytes]u8 = undefined;
-        try std.testing.expectEqualStrings("abc", try joinPaths(&buf, &.{"abc"}));
+        try testing.expectEqualStrings("abc", try joinPaths(&buf, &.{"abc"}));
     }
     {
         var buf: [fs.max_path_bytes]u8 = undefined;
-        try std.testing.expectEqualStrings("", try joinPaths(&buf, &.{""}));
+        try testing.expectEqualStrings("", try joinPaths(&buf, &.{""}));
     }
     {
         var buf: [fs.max_path_bytes]u8 = undefined;
-        try std.testing.expectEqualStrings("/", try joinPaths(&buf, &.{ "", "" }));
+        try testing.expectEqualStrings("/", try joinPaths(&buf, &.{ "", "" }));
     }
 
     {
         var buf: [6]u8 = undefined;
-        try std.testing.expectError(error.BufTooSmall, joinPaths(&buf, &.{ "abc", "def" }));
+        try testing.expectError(error.BufTooSmall, joinPaths(&buf, &.{ "abc", "def" }));
     }
     {
         var buf: [0]u8 = undefined;
-        try std.testing.expectError(error.BufTooSmall, joinPaths(&buf, &.{"a"}));
+        try testing.expectError(error.BufTooSmall, joinPaths(&buf, &.{"a"}));
     }
 }
