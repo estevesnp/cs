@@ -234,7 +234,7 @@ test "searchProjects returns correct projects" {
     const base_path = try tmp_dir.realpathAlloc(gpa, ".");
     defer gpa.free(base_path);
 
-    try test_mountFilesystem(gpa, tmp_dir);
+    try test_mountNestedTree(tmp_dir);
 
     try test_assertProjects(
         gpa,
@@ -318,7 +318,7 @@ test "searchProjects returns correct projects" {
     );
 }
 
-test "searchProjects doesn't leak memory" {
+test "searchProjects doesn't leak memory on nested tree" {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
 
@@ -332,7 +332,7 @@ test "searchProjects doesn't leak memory" {
     const base_path = try tmp_dir.realpathAlloc(gpa, ".");
     defer gpa.free(base_path);
 
-    try test_mountFilesystem(gpa, tmp_dir);
+    try test_mountNestedTree(tmp_dir);
 
     try testing.checkAllAllocationFailures(
         testing.allocator,
@@ -353,9 +353,11 @@ test "searchProjects doesn't leak memory" {
     );
 }
 
-test "searchProjects doesn't leak memory on bad path" {
-    if (true) return error.SkipZigTest;
-    const gpa = testing.allocator;
+test "searchProjects doesn't leak memory on file only filetree" {
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+
+    const gpa = debug_allocator.allocator();
 
     var tmp_dir_state = testing.tmpDir(.{});
     defer tmp_dir_state.cleanup();
@@ -365,14 +367,19 @@ test "searchProjects doesn't leak memory on bad path" {
     const base_path = try tmp_dir.realpathAlloc(gpa, ".");
     defer gpa.free(base_path);
 
-    const root_paths: []const []const u8 = &.{
-        try fs.path.join(gpa, &.{ base_path, "root-1" }),
-        try fs.path.join(gpa, &.{ base_path, "non-existing-dir" }),
-    };
-    defer for (root_paths) |p| gpa.free(p);
+    try test_mountFilesOnlyTree(tmp_dir);
 
-    try testing.expectError(error.FileNotFound, searchProjects(gpa, root_paths, .{}));
-    try testing.expectError(error.OutOfMemory, searchProjects(testing.failing_allocator, root_paths, .{}));
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        test_assertProjects,
+        .{
+            gpa,
+            &.{
+                &.{base_path},
+            },
+            &.{},
+        },
+    );
 }
 
 test "searchProjects reports properly on non-existing roots" {
@@ -386,7 +393,7 @@ test "searchProjects reports properly on non-existing roots" {
     const base_path = try tmp_dir.realpathAlloc(gpa, ".");
     defer gpa.free(base_path);
 
-    try test_mountFilesystem(gpa, tmp_dir);
+    try test_mountNestedTree(tmp_dir);
 
     const root_paths: []const []const u8 = &.{
         try fs.path.join(gpa, &.{ base_path, "root-2" }),
@@ -490,75 +497,113 @@ fn test_assertProjects(
     if (returned_not_found or written_not_found) return error.NoMatch;
 }
 
-const TestFile = struct {
-    name: []const u8,
-    type: enum { file, directory },
-    children: ?[]TestFile = null,
+const WalkTest = struct {
+    const Node = struct {
+        name: []const u8,
+        type: enum { file, directory },
+        children: ?[]const Node = null,
+    };
+
+    fn file(name: []const u8) Node {
+        return .{ .name = name, .type = .file };
+    }
+
+    fn dir(name: []const u8, children: []const Node) Node {
+        return .{
+            .name = name,
+            .type = .directory,
+            .children = children,
+        };
+    }
 };
 
-fn test_mountFilesystem(gpa: Allocator, root: fs.Dir) !void {
-    // /
-    // ├── root-1
-    // │   ├── a-file.txt
-    // │   ├── nest-1-1
-    // │   │   ├── not-proj-1-1-1
-    // │   │   │   └── documents.csv
-    // │   │   └── proj-1-1-1
-    // │   │       └── .git
-    // │   ├── not-proj-1-1
-    // │   │   └── empty
-    // │   │       └── emptier
-    // │   │           └── foo.txt
-    // │   ├── proj-1-1
-    // │   │   ├── .abc
-    // │   │   ├── .git
-    // │   │   └── text.txt
-    // │   └── proj-1-2
-    // │       ├── .jj
-    // │       └── README.md
-    // ├── root-2
-    // │   └── proj-2-1
-    // │       ├── .jj
-    // │       └── src
-    // │           └── main.c
-    // ├── root-3
-    // │   ├── .git
-    // │   └── ziglab
-    // │       └── .git
-    // └── root-4
-    //     ├── bar
-    //     │   └── baz
-    //     │       └── b.txt
-    //     └── foo
-    //         └── a.txt
+fn test_mountNestedTree(root: fs.Dir) !void {
+    const w = WalkTest;
+    const tree: []const WalkTest.Node = &.{
+        w.dir("root-1", &.{
+            w.file("a-file.txt"),
+            w.dir("nest-1-1", &.{
+                w.dir("not-proj-1-1-1", &.{
+                    w.file("documents.csv"),
+                }),
+                w.dir("proj-1-1-1", &.{ // root
+                    w.dir(".git", &.{}),
+                }),
+            }),
+            w.dir("not-proj-1-1", &.{
+                w.dir("empty", &.{
+                    w.dir("emptier", &.{
+                        w.file("foo.txt"),
+                    }),
+                }),
+            }),
+            w.dir("proj-1-1", &.{ // root
+                w.file(".abc"),
+                w.dir(".git", &.{}),
+                w.file("text.txt"),
+            }),
+            w.dir("proj-1-2", &.{ // root
+                w.file(".jj"),
+                w.file("README.md"),
+            }),
+        }),
+        w.dir("root-2", &.{
+            w.dir("proj-2-1", &.{ // root
+                w.file(".jj"),
+                w.dir("src", &.{
+                    w.file("main.c"),
+                }),
+            }),
+        }),
+        w.dir("root-3", &.{
+            w.dir(".git", &.{}),
+            w.dir("ziglab", &.{ // root
+                w.dir(".git", &.{}),
+            }),
+        }),
+        w.dir("root-4", &.{
+            w.dir("bar", &.{
+                w.dir("baz", &.{
+                    w.file("b.txt"),
+                }),
+            }),
+            w.dir("foo", &.{
+                w.file("a.txt"),
+            }),
+        }),
+    };
 
-    var tree_file = try fs.cwd().openFile("test/walk-tree.json", .{});
-    defer tree_file.close();
+    try test_mountFilesystem(root, tree);
+}
 
-    var buf: [4096]u8 = undefined;
-    var file_br = tree_file.reader(&buf);
-    var json_reader = std.json.Reader.init(gpa, &file_br.interface);
-    defer json_reader.deinit();
+fn test_mountFilesOnlyTree(root: fs.Dir) !void {
+    const w = WalkTest;
+    const tree: []const WalkTest.Node = &.{
+        w.file("foo"),
+        w.file("bar"),
+        w.file("bar"),
+    };
 
-    var rest = try std.json.parseFromTokenSource([]TestFile, gpa, &json_reader, .{});
-    defer rest.deinit();
+    try test_mountFilesystem(root, tree);
+}
 
-    for (rest.value) |info| {
-        try test_createFilesystem(root, info);
+fn test_mountFilesystem(root: fs.Dir, tree: []const WalkTest.Node) !void {
+    for (tree) |node| {
+        try test_createFilesystem(root, node);
     }
 }
 
-fn test_createFilesystem(parent: fs.Dir, info: TestFile) !void {
-    if (info.type == .file) {
-        var f = try parent.createFile(info.name, .{});
+fn test_createFilesystem(parent: fs.Dir, node: WalkTest.Node) !void {
+    if (node.type == .file) {
+        var f = try parent.createFile(node.name, .{});
         f.close();
         return;
     }
 
-    var next = try parent.makeOpenPath(info.name, .{});
+    var next = try parent.makeOpenPath(node.name, .{});
     defer next.close();
 
-    if (info.children) |children| {
+    if (node.children) |children| {
         for (children) |dir| try test_createFilesystem(next, dir);
     }
 }
