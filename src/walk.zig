@@ -56,7 +56,7 @@ const Context = struct {
             .max_depth = opts.max_depth,
             .writer = opts.writer,
             .reporter = opts.reporter,
-            .project_markers = opts.project_markers,
+            .project_markers = if (opts.project_markers.len == 0) default_project_markers else opts.project_markers,
             .flush_after = opts.flush_after,
             .separator_byte = opts.separator_byte,
         };
