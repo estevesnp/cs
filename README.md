@@ -38,6 +38,20 @@ description:
   such as creating a new tmux session or changing directory to the project
 ```
 
+## config
+
+the config path is `$XDG_CONFIG_HOME/cs/config.json` in linux/mac (with a fallback to `HOME`),
+and `%APPDATA%\cs\config.json` in windows. here is an example config:
+
+```json
+{
+  "project_roots": ["/home/estevesnp/proj", "/home/estevesnp/pers"],
+  "project_markers": [".git", ".jj", ".csm"],
+  "preview": "eza {} -la --color=always",
+  "action": "session"
+}
+```
+
 ## shell integration
 
 current shell integrations:
@@ -60,6 +74,10 @@ eval "$(cs --shell bash)"
 
 ## TODO
 
+- project marker as cli option?
+- project roots as cli option?
+- tmux script?
+- remake --env --json to normalize parsing
 - propper error diagnostics and error handling
 - native frontend
 - shell completions?

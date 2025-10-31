@@ -8,6 +8,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 const cli = @import("cli.zig");
+const walk = @import("walk.zig");
 const SearchAction = cli.SearchAction;
 
 const APP_NAME = "cs";
@@ -22,6 +23,8 @@ const DEFAULT_FZF_PREVIEW = switch (builtin.os.tag) {
 pub const Config = struct {
     /// directories to search for projects
     project_roots: []const []const u8 = &.{},
+    /// files or dirs that mark a directory as a `project`
+    project_markers: []const []const u8 = walk.default_project_markers,
     /// fzf preview command. --no-preview sets this as an empty string
     preview: []const u8 = DEFAULT_FZF_PREVIEW,
     /// action to take on project found

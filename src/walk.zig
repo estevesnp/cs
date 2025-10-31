@@ -6,7 +6,7 @@ const ArrayList = std.ArrayList;
 const Writer = std.Io.Writer;
 const assert = std.debug.assert;
 
-const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
+pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
 
 pub const SearchError = fs.File.OpenError || Allocator.Error || Writer.Error;
 

@@ -298,14 +298,19 @@ fn search(arena: Allocator, reporter: *Writer, search_opts: cli.SearchOpts) !voi
 
     // +1 for the new line
     var path_buf: [fs.max_path_bytes + 1]u8 = undefined;
-    const path = searchProject(.{
-        .arena = arena,
+
+    const walk_opts: WalkOpts = .{
         .roots = cfg.project_roots,
+        .project_markers = cfg.project_markers,
+        .reporter = reporter,
+    };
+    const fzf_opts: FzfOpts = .{
         .project_query = search_opts.project,
         .preview = preview,
         .path_buf = &path_buf,
-        .reporter = reporter,
-    }) catch |err| switch (err) {
+    };
+
+    const path = searchProject(arena, walk_opts, fzf_opts) catch |err| switch (err) {
         error.FzfNotFound => exit("fzf binary not found in path\n"),
         error.NoProjectsFound => exit("no projects found\n"),
         else => return err,
@@ -331,31 +336,39 @@ fn search(arena: Allocator, reporter: *Writer, search_opts: cli.SearchOpts) !voi
     }
 }
 
+const WalkOpts = struct {
+    roots: []const []const u8,
+    project_markers: []const []const u8,
+    reporter: *Writer,
+};
+
+const FzfOpts = struct {
+    project_query: []const u8,
+    preview: []const u8,
+    path_buf: []u8,
+};
+
 const SearchError = ExtractError || walk.SearchError || process.Child.SpawnError ||
     error{NoProjectsFound};
 
 /// searches for project. returned slice may or may not be the buffer passed in.
-fn searchProject(opts: struct {
-    arena: Allocator,
-    roots: []const []const u8,
-    project_query: []const u8,
-    preview: []const u8,
-    path_buf: []u8,
-    reporter: *Writer,
-}) SearchError!?[]const u8 {
-    const project_set = try walk.searchProjects(opts.arena, opts.roots, .{});
+fn searchProject(arena: Allocator, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchError!?[]const u8 {
+    const project_set = try walk.searchProjects(arena, walk_opts.roots, .{
+        .reporter = walk_opts.reporter,
+        .project_markers = walk_opts.project_markers,
+    });
     const projects = project_set.keys();
 
     if (projects.len == 0) {
         return error.NoProjectsFound;
     }
 
-    if (matchProject(opts.project_query, projects)) |matched_path| {
+    if (matchProject(fzf_opts.project_query, projects)) |matched_path| {
         // TODO: should we fill the path_buf and return it for consistency?
         return matched_path;
     }
 
-    var fzf_proc = try spawnFzf(opts.arena, opts.project_query, opts.preview);
+    var fzf_proc = try spawnFzf(arena, fzf_opts.project_query, fzf_opts.preview);
     errdefer _ = fzf_proc.kill() catch {};
 
     var buf: [256]u8 = undefined;
@@ -372,7 +385,7 @@ fn searchProject(opts: struct {
     fzf_proc.stdin.?.close();
     fzf_proc.stdin = null;
 
-    return extractProject(&fzf_proc, opts.path_buf);
+    return extractProject(&fzf_proc, fzf_opts.path_buf);
 }
 
 const ExtractError = Reader.DelimiterError || process.Child.WaitError || error{
