@@ -1,17 +1,7 @@
 const std = @import("std");
 
 const walk = @import("src/walk.zig");
-const build_zig_zon: Z = @import("build.zig.zon");
-
-/// build.zig.zon schema
-const Z = struct {
-    name: enum { cs },
-    version: []const u8,
-    fingerprint: u64,
-    minimum_zig_version: []const u8,
-    dependencies: struct {},
-    paths: []const []const u8,
-};
+const build_zig_zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
