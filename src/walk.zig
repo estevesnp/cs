@@ -2,13 +2,14 @@ const std = @import("std");
 const fs = std.fs;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 const ArrayList = std.ArrayList;
-const Writer = std.Io.Writer;
+const Writer = Io.Writer;
 const assert = std.debug.assert;
 
 pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
 
-pub const SearchError = fs.File.OpenError || Allocator.Error || Writer.Error;
+pub const SearchError = Io.File.OpenError || Allocator.Error || Writer.Error;
 
 /// when to flush the writer
 pub const FlushAfter = enum {
@@ -115,10 +116,11 @@ const Context = struct {
 /// if no arena is used, caller must free the return object. check `freeProjects`
 pub fn searchProjects(
     gpa: Allocator,
+    io: Io,
     root_paths: []const []const u8,
     opts: SearchOpts,
 ) SearchError!std.StringArrayHashMapUnmanaged(void) {
-    var ctx = try search(gpa, root_paths, opts);
+    var ctx = try search(gpa, io, root_paths, opts);
     defer ctx.deinit(gpa);
 
     return ctx.projects.move();
@@ -132,24 +134,24 @@ pub fn freeProjects(gpa: Allocator, projects: *std.StringArrayHashMapUnmanaged(v
     projects.deinit(gpa);
 }
 
-fn search(gpa: Allocator, root_paths: []const []const u8, opts: SearchOpts) SearchError!Context {
+fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOpts) SearchError!Context {
     assert(root_paths.len > 0);
 
     var ctx: Context = .init(opts);
     errdefer ctx.deinit(gpa);
 
     for (root_paths) |root_path| {
-        var root_dir = fs.openDirAbsolute(root_path, .{ .iterate = true }) catch |err| switch (err) {
+        var root_dir = Io.Dir.openDirAbsolute(io, root_path, .{ .iterate = true }) catch |err| switch (err) {
             error.FileNotFound => {
                 ctx.report("root {s} not found, skipping", .{root_path});
                 continue;
             },
             else => |e| return e,
         };
-        defer root_dir.close();
+        defer root_dir.close(io);
 
         try ctx.changeRoot(gpa, root_path);
-        try searchDir(gpa, &ctx, root_dir, 0);
+        try searchDir(gpa, io, &ctx, root_dir, 0);
 
         if (ctx.flush_after == .root) {
             if (ctx.writer) |w| try w.flush();
@@ -163,13 +165,13 @@ fn search(gpa: Allocator, root_paths: []const []const u8, opts: SearchOpts) Sear
     return ctx;
 }
 
-fn searchDir(gpa: Allocator, ctx: *Context, dir: fs.Dir, depth: usize) SearchError!void {
+fn searchDir(gpa: Allocator, io: Io, ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
     if (depth > ctx.max_depth) return;
 
     const to_check_start_idx = ctx.to_check_stack.items.len;
 
     var iter = dir.iterate();
-    while (try iter.next()) |inner| {
+    while (try iter.next(io)) |inner| {
         if (anyEql(ctx.project_markers, inner.name)) {
             const path_name = try fs.path.join(gpa, ctx.path_stack.items);
             errdefer gpa.free(path_name);
@@ -209,10 +211,10 @@ fn searchDir(gpa: Allocator, ctx: *Context, dir: fs.Dir, depth: usize) SearchErr
         try ctx.path_stack.append(gpa, to_check);
         defer _ = ctx.path_stack.pop();
 
-        var dir_to_check = try dir.openDir(to_check, .{ .iterate = true });
-        defer dir_to_check.close();
+        var dir_to_check = try dir.openDir(io, to_check, .{ .iterate = true });
+        defer dir_to_check.close(io);
 
-        try searchDir(gpa, ctx, dir_to_check, depth + 1);
+        try searchDir(gpa, io, ctx, dir_to_check, depth + 1);
     }
 }
 
@@ -231,7 +233,7 @@ test "searchProjects returns correct projects" {
 
     const tmp_dir = tmp_dir_state.dir;
 
-    const base_path = try tmp_dir.realpathAlloc(gpa, ".");
+    const base_path = try tmp_dir.realPathFileAlloc(testing.io, ".", gpa);
     defer gpa.free(base_path);
 
     try test_mountNestedTree(tmp_dir);
@@ -329,7 +331,7 @@ test "searchProjects doesn't leak memory on nested tree" {
 
     const tmp_dir = tmp_dir_state.dir;
 
-    const base_path = try tmp_dir.realpathAlloc(gpa, ".");
+    const base_path = try tmp_dir.realPathFileAlloc(testing.io, ".", gpa);
     defer gpa.free(base_path);
 
     try test_mountNestedTree(tmp_dir);
@@ -364,7 +366,7 @@ test "searchProjects doesn't leak memory on file only filetree" {
 
     const tmp_dir = tmp_dir_state.dir;
 
-    const base_path = try tmp_dir.realpathAlloc(gpa, ".");
+    const base_path = try tmp_dir.realPathFileAlloc(testing.io, ".", gpa);
     defer gpa.free(base_path);
 
     try test_mountFilesOnlyTree(tmp_dir);
@@ -390,7 +392,7 @@ test "searchProjects reports properly on non-existing roots" {
 
     const tmp_dir = tmp_dir_state.dir;
 
-    const base_path = try tmp_dir.realpathAlloc(gpa, ".");
+    const base_path = try tmp_dir.realPathFileAlloc(testing.io, ".", gpa);
     defer gpa.free(base_path);
 
     try test_mountNestedTree(tmp_dir);
@@ -415,7 +417,7 @@ test "searchProjects reports properly on non-existing roots" {
     var allocating_writer: Writer.Allocating = .init(gpa);
     defer allocating_writer.deinit();
 
-    var projects = try searchProjects(gpa, root_paths, .{ .reporter = &allocating_writer.writer });
+    var projects = try searchProjects(gpa, testing.io, root_paths, .{ .reporter = &allocating_writer.writer });
     defer freeProjects(gpa, &projects);
 
     try testing.expectEqual(1, projects.count());
@@ -446,7 +448,7 @@ fn test_assertProjects(
 
     var alloc_writer: Writer.Allocating = .init(arena);
 
-    var project_set = try searchProjects(testing_allocator, roots, .{
+    var project_set = try searchProjects(testing_allocator, testing.io, roots, .{
         .writer = &alloc_writer.writer,
         .flush_after = .end,
     });
@@ -517,7 +519,7 @@ const WalkTest = struct {
     }
 };
 
-fn test_mountNestedTree(root: fs.Dir) !void {
+fn test_mountNestedTree(root: Io.Dir) !void {
     const w = WalkTest;
     const tree: []const WalkTest.Node = &.{
         w.dir("root-1", &.{
@@ -576,7 +578,7 @@ fn test_mountNestedTree(root: fs.Dir) !void {
     try test_mountFilesystem(root, tree);
 }
 
-fn test_mountFilesOnlyTree(root: fs.Dir) !void {
+fn test_mountFilesOnlyTree(root: Io.Dir) !void {
     const w = WalkTest;
     const tree: []const WalkTest.Node = &.{
         w.file("foo"),
@@ -587,21 +589,21 @@ fn test_mountFilesOnlyTree(root: fs.Dir) !void {
     try test_mountFilesystem(root, tree);
 }
 
-fn test_mountFilesystem(root: fs.Dir, tree: []const WalkTest.Node) !void {
+fn test_mountFilesystem(root: Io.Dir, tree: []const WalkTest.Node) !void {
     for (tree) |node| {
         try test_createFilesystem(root, node);
     }
 }
 
-fn test_createFilesystem(parent: fs.Dir, node: WalkTest.Node) !void {
+fn test_createFilesystem(parent: Io.Dir, node: WalkTest.Node) !void {
     if (node.type == .file) {
-        var f = try parent.createFile(node.name, .{});
-        f.close();
+        var f = try parent.createFile(testing.io, node.name, .{});
+        f.close(testing.io);
         return;
     }
 
-    var next = try parent.makeOpenPath(node.name, .{});
-    defer next.close();
+    var next = try parent.createDirPathOpen(testing.io, node.name, .{});
+    defer next.close(testing.io);
 
     if (node.children) |children| {
         for (children) |dir| try test_createFilesystem(next, dir);

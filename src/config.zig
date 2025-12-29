@@ -6,6 +6,7 @@ const unicode = std.unicode;
 const json = std.json;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 
 const cli = @import("cli.zig");
 const walk = @import("walk.zig");
@@ -32,11 +33,11 @@ pub const Config = struct {
 };
 
 pub const ConfigContext = struct {
-    config_file: fs.File,
+    config_file: Io.File,
     config: Config,
 
-    pub fn deinit(self: *ConfigContext) void {
-        self.config_file.close();
+    pub fn deinit(self: *ConfigContext, io: Io) void {
+        self.config_file.close(io);
     }
 };
 
@@ -44,39 +45,39 @@ pub const OpenConfigError = GetConfigDirPathError || GetConfigContextError;
 
 /// gets the app's config path, then opens and deserializes it.
 /// creates an empty config file if non exists.
-pub fn openConfig(arena: Allocator) OpenConfigError!ConfigContext {
-    var path_buf: [fs.max_path_bytes]u8 = undefined;
+pub fn openConfig(arena: Allocator, io: Io) OpenConfigError!ConfigContext {
+    var path_buf: [Io.Dir.max_path_bytes]u8 = undefined;
     const path = try getConfigDirPath(&path_buf);
 
-    return openConfigFromPath(arena, path);
+    return openConfigFromPath(arena, io, path);
 }
 
-const GetConfigContextError = fs.Dir.MakeError || fs.Dir.OpenError || fs.Dir.StatFileError || json.ParseError(json.Reader);
+const GetConfigContextError = Io.Dir.CreateDirError || Io.Dir.OpenError || Io.Dir.StatFileError || json.ParseError(json.Reader);
 
 /// opens and deserializes config from the given path.
 /// creates an empty config file if non exists.
-pub fn openConfigFromPath(arena: Allocator, config_path: []const u8) GetConfigContextError!ConfigContext {
-    var config_dir = try fs.cwd().makeOpenPath(config_path, .{});
-    defer config_dir.close();
+pub fn openConfigFromPath(arena: Allocator, io: Io, config_path: []const u8) GetConfigContextError!ConfigContext {
+    var config_dir = try Io.Dir.cwd().createDirPathOpen(io, config_path, .{});
+    defer config_dir.close(io);
 
-    var config_file = config_dir.openFile(CONFIG_FILE_NAME, .{ .mode = .read_write }) catch |err| switch (err) {
+    var config_file = config_dir.openFile(io, CONFIG_FILE_NAME, .{ .mode = .read_write }) catch |err| switch (err) {
         // create file if none exists
         error.FileNotFound => return .{
-            .config_file = try config_dir.createFile(CONFIG_FILE_NAME, .{}),
+            .config_file = try config_dir.createFile(io, CONFIG_FILE_NAME, .{}),
             .config = .{},
         },
         else => return err,
     };
 
     var file_buf: [2048]u8 = undefined;
-    var file_reader = config_file.reader(&file_buf);
+    var file_reader = config_file.reader(io, &file_buf);
 
     var json_reader = json.Reader.init(arena, &file_reader.interface);
     defer json_reader.deinit();
 
     const config = json.parseFromTokenSourceLeaky(Config, arena, &json_reader, .{}) catch |err| {
         // don't fail if file is empty
-        if (err == error.UnexpectedEndOfInput and try config_file.getEndPos() == 0) {
+        if (err == error.UnexpectedEndOfInput and try config_file.length(io) == 0) {
             return .{
                 .config_file = config_file,
                 .config = .{},
@@ -99,7 +100,7 @@ pub fn getConfigDirPath(path_buf: []u8) GetConfigDirPathError![]u8 {
             const key = unicode.wtf8ToWtf16LeStringLiteral("APPDATA");
             const appdata = process.getenvW(key) orelse return error.HomeNotFound;
 
-            var buf: [fs.max_path_bytes]u8 = undefined;
+            var buf: [Io.Dir.max_path_bytes]u8 = undefined;
             const n = unicode.wtf16LeToWtf8(&buf, appdata);
 
             return try joinPaths(path_buf, &.{ buf[0..n], APP_NAME });
@@ -114,12 +115,13 @@ pub fn getConfigDirPath(path_buf: []u8) GetConfigDirPathError![]u8 {
     }
 }
 
-pub fn updateConfig(cfg_file: fs.File, cfg: Config) !void {
-    try cfg_file.setEndPos(0);
-    try cfg_file.seekTo(0);
+pub fn updateConfig(io: Io, cfg_file: Io.File, cfg: Config) !void {
+    try cfg_file.setLength(io, 0);
 
     var buf: [1024]u8 = undefined;
-    var file_bw = cfg_file.writer(&buf);
+    var file_bw = cfg_file.writer(io, &buf);
+
+    try file_bw.seekTo(0);
 
     const file_writer = &file_bw.interface;
 
@@ -159,23 +161,23 @@ test "ref all decls" {
 
 test joinPaths {
     {
-        var buf: [fs.max_path_bytes]u8 = undefined;
+        var buf: [Io.Dir.max_path_bytes]u8 = undefined;
         try testing.expectEqualStrings("abc/def/ghi", try joinPaths(&buf, &.{ "abc", "def", "ghi" }));
     }
     {
-        var buf: [fs.max_path_bytes]u8 = undefined;
+        var buf: [Io.Dir.max_path_bytes]u8 = undefined;
         try testing.expectEqualStrings("abc/def", try joinPaths(&buf, &.{ "abc", "def" }));
     }
     {
-        var buf: [fs.max_path_bytes]u8 = undefined;
+        var buf: [Io.Dir.max_path_bytes]u8 = undefined;
         try testing.expectEqualStrings("abc", try joinPaths(&buf, &.{"abc"}));
     }
     {
-        var buf: [fs.max_path_bytes]u8 = undefined;
+        var buf: [Io.Dir.max_path_bytes]u8 = undefined;
         try testing.expectEqualStrings("", try joinPaths(&buf, &.{""}));
     }
     {
-        var buf: [fs.max_path_bytes]u8 = undefined;
+        var buf: [Io.Dir.max_path_bytes]u8 = undefined;
         try testing.expectEqualStrings("/", try joinPaths(&buf, &.{ "", "" }));
     }
 

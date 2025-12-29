@@ -4,9 +4,10 @@ const options = @import("options");
 const fs = std.fs;
 const process = std.process;
 const testing = std.testing;
-const File = std.fs.File;
-const Writer = std.Io.Writer;
-const Reader = std.Io.Reader;
+const Io = std.Io;
+const File = Io.File;
+const Writer = Io.Writer;
+const Reader = Io.Reader;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
@@ -53,8 +54,13 @@ const USAGE =
     \\
 ;
 
-fn exit(msg: []const u8) noreturn {
-    File.stderr().writeAll(msg) catch {};
+fn exit(io: Io, msg: []const u8) noreturn {
+    var buf: [100]u8 = undefined;
+    var stderr_bw = File.stderr().writer(io, &buf);
+    const stderr = &stderr_bw.interface;
+
+    stderr.writeAll(msg) catch {};
+    stderr.flush() catch {};
     process.exit(1);
 }
 
@@ -71,11 +77,14 @@ pub fn main() !void {
 
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
-
     const arena = arena_state.allocator();
 
+    var threaded: Io.Threaded = .init(arena, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var stderr_buf: [1024]u8 = undefined;
-    var stderr_writer = File.stderr().writer(&stderr_buf);
+    var stderr_writer = File.stderr().writer(io, &stderr_buf);
     const stderr = &stderr_writer.interface;
 
     const diag: cli.Diagnostic = .{ .writer = stderr };
@@ -85,24 +94,29 @@ pub fn main() !void {
     const command = try cli.parse(&diag, args);
 
     switch (command) {
-        .help => try help(),
-        .version => try version(),
-        .env => |e| try env(arena, e),
-        .@"add-paths" => |paths| try addPaths(arena, .{ .writer = stderr }, paths),
-        .@"set-paths" => |paths| try setPaths(arena, .{ .writer = stderr }, paths),
-        .@"remove-paths" => |paths| try removePaths(arena, .{ .writer = stderr }, paths),
-        .shell => |shell| try shellIntegration(arena, shell),
-        .search => |opts| try search(arena, stderr, opts),
+        .help => try help(io),
+        .version => try version(io),
+        .env => |e| try env(arena, io, e),
+        .@"add-paths" => |paths| try addPaths(arena, io, .{ .writer = stderr }, paths),
+        .@"set-paths" => |paths| try setPaths(arena, io, .{ .writer = stderr }, paths),
+        .@"remove-paths" => |paths| try removePaths(arena, io, .{ .writer = stderr }, paths),
+        .shell => |shell| try shellIntegration(arena, io, shell),
+        .search => |opts| try search(arena, io, stderr, opts),
     }
 }
 
-fn help() File.WriteError!void {
-    try File.stdout().writeAll(USAGE);
+fn help(io: Io) Writer.Error!void {
+    var buf: [USAGE.len]u8 = undefined;
+    var stdout_writer = File.stdout().writer(io, &buf);
+    const stdout = &stdout_writer.interface;
+
+    try stdout.writeAll(USAGE);
+    try stdout.flush();
 }
 
-fn version() Writer.Error!void {
+fn version(io: Io) Writer.Error!void {
     var buf: [100]u8 = undefined;
-    var stdout_writer = File.stdout().writer(&buf);
+    var stdout_writer = File.stdout().writer(io, &buf);
     const stdout = &stdout_writer.interface;
 
     try stdout.print("{f}\n", .{options.cs_version});
@@ -111,8 +125,8 @@ fn version() Writer.Error!void {
 
 const EnvError = config.OpenConfigError || Writer.Error;
 
-fn env(arena: Allocator, env_fmt: cli.EnvFmt) EnvError!void {
-    var path_buf: [fs.max_path_bytes]u8 = undefined;
+fn env(arena: Allocator, io: Io, env_fmt: cli.EnvFmt) EnvError!void {
+    var path_buf: [Io.Dir.max_path_bytes]u8 = undefined;
     const cfg_dir_path = try config.getConfigDirPath(&path_buf);
 
     // config dir + separator + config file
@@ -125,13 +139,13 @@ fn env(arena: Allocator, env_fmt: cli.EnvFmt) EnvError!void {
 
     const full_cfg_path = path_buf[0..full_path_len];
 
-    var cfg_context = try config.openConfigFromPath(arena, cfg_dir_path);
-    cfg_context.deinit();
+    var cfg_context = try config.openConfigFromPath(arena, io, cfg_dir_path);
+    cfg_context.deinit(io);
 
     const cfg = cfg_context.config;
 
     var stdout_buf: [256]u8 = undefined;
-    var stdout_writer = File.stdout().writer(&stdout_buf);
+    var stdout_writer = File.stdout().writer(io, &stdout_buf);
     const stdout = &stdout_writer.interface;
 
     switch (env_fmt) {
@@ -171,21 +185,21 @@ const Reporter = struct {
     }
 };
 
-fn addPaths(arena: Allocator, reporter: Reporter, paths: []const []const u8) !void {
+fn addPaths(arena: Allocator, io: Io, reporter: Reporter, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(arena);
-    defer cfg_context.deinit();
+    var cfg_context = try config.openConfig(arena, io);
+    defer cfg_context.deinit(io);
 
     var cfg = cfg_context.config;
 
     var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.project_roots, &.{});
     defer path_set.deinit(arena);
 
-    const cwd = fs.cwd();
+    const cwd = Io.Dir.cwd();
     for (paths) |path| {
         if (path.len == 0) continue;
-        const real_path = cwd.realpathAlloc(arena, path) catch |err| switch (err) {
+        const real_path = cwd.realPathFileAlloc(io, path, arena) catch |err| switch (err) {
             error.FileNotFound => {
                 reporter.report("{s} not found", .{path});
                 continue;
@@ -200,24 +214,24 @@ fn addPaths(arena: Allocator, reporter: Reporter, paths: []const []const u8) !vo
 
     cfg.project_roots = path_set.keys();
 
-    try config.updateConfig(cfg_context.config_file, cfg);
+    try config.updateConfig(io, cfg_context.config_file, cfg);
 }
 
-fn setPaths(arena: Allocator, reporter: Reporter, paths: []const []const u8) !void {
+fn setPaths(arena: Allocator, io: Io, reporter: Reporter, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(arena);
-    defer cfg_context.deinit();
+    var cfg_context = try config.openConfig(arena, io);
+    defer cfg_context.deinit(io);
 
     var cfg = cfg_context.config;
 
     var path_set: std.StringArrayHashMapUnmanaged(void) = .empty;
     defer path_set.deinit(arena);
 
-    const cwd = fs.cwd();
+    const cwd = Io.Dir.cwd();
     for (paths) |path| {
         if (path.len == 0) continue;
-        const real_path = cwd.realpathAlloc(arena, path) catch |err| switch (err) {
+        const real_path = cwd.realPathFileAlloc(io, path, arena) catch |err| switch (err) {
             error.FileNotFound => {
                 reporter.report("{s} not found", .{path});
                 continue;
@@ -238,14 +252,14 @@ fn setPaths(arena: Allocator, reporter: Reporter, paths: []const []const u8) !vo
 
     cfg.project_roots = path_set.keys();
 
-    try config.updateConfig(cfg_context.config_file, cfg);
+    try config.updateConfig(io, cfg_context.config_file, cfg);
 }
 
-fn removePaths(arena: Allocator, reporter: Reporter, paths: []const []const u8) !void {
+fn removePaths(arena: Allocator, io: Io, reporter: Reporter, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(arena);
-    defer cfg_context.deinit();
+    var cfg_context = try config.openConfig(arena, io);
+    defer cfg_context.deinit(io);
 
     var cfg = cfg_context.config;
 
@@ -266,10 +280,10 @@ fn removePaths(arena: Allocator, reporter: Reporter, paths: []const []const u8) 
 
     cfg.project_roots = path_set.keys();
 
-    try config.updateConfig(cfg_context.config_file, cfg);
+    try config.updateConfig(io, cfg_context.config_file, cfg);
 }
 
-fn shellIntegration(arena: Allocator, shell: ?cli.Shell) !void {
+fn shellIntegration(arena: Allocator, io: Io, shell: ?cli.Shell) !void {
     const shell_tag = shell orelse blk: {
         const shell_path = try process.getEnvVarOwned(arena, "SHELL");
         const shell_name = fs.path.basename(shell_path);
@@ -281,23 +295,28 @@ fn shellIntegration(arena: Allocator, shell: ?cli.Shell) !void {
         .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
     };
 
-    try File.stdout().writeAll(csd_integration);
+    var buf: [100]u8 = undefined;
+    var stdout_writer = File.stdout().writer(io, &buf);
+    const stdout = &stdout_writer.interface;
+
+    try stdout.writeAll(csd_integration);
+    try stdout.flush();
 }
 
-fn search(arena: Allocator, reporter: *Writer, search_opts: cli.SearchOpts) !void {
-    var cfg_context = try config.openConfig(arena);
-    cfg_context.deinit();
+fn search(arena: Allocator, io: Io, reporter: *Writer, search_opts: cli.SearchOpts) !void {
+    var cfg_context = try config.openConfig(arena, io);
+    cfg_context.deinit(io);
 
     const cfg = cfg_context.config;
 
     if (cfg.project_roots.len == 0) {
-        exit("no project roots found. add one using the '--add-paths' flag\n");
+        exit(io, "no project roots found. add one using the '--add-paths' flag\n");
     }
 
     const preview = search_opts.preview orelse cfg.preview;
 
     // +1 for the new line
-    var path_buf: [fs.max_path_bytes + 1]u8 = undefined;
+    var path_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
 
     const walk_opts: WalkOpts = .{
         .roots = cfg.project_roots,
@@ -310,26 +329,34 @@ fn search(arena: Allocator, reporter: *Writer, search_opts: cli.SearchOpts) !voi
         .path_buf = &path_buf,
     };
 
-    const path = searchProject(arena, walk_opts, fzf_opts) catch |err| switch (err) {
-        error.FzfNotFound => exit("fzf binary not found in path\n"),
-        error.NoProjectsFound => exit("no projects found\n"),
+    const path = searchProject(arena, io, walk_opts, fzf_opts) catch |err| switch (err) {
+        error.FzfNotFound => exit(io, "fzf binary not found in path\n"),
+        error.NoProjectsFound => exit(io, "no projects found\n"),
         else => return err,
     } orelse return;
 
     const action = search_opts.action orelse cfg.action;
     switch (action) {
-        .print => try File.stdout().writeAll(path),
+        .print => {
+            var stdout_buf: [256]u8 = undefined;
+            var stdout_writer = File.stdout().writer(io, &stdout_buf);
+            const stdout = &stdout_writer.interface;
+
+            try stdout.writeAll(path);
+            try stdout.flush();
+        },
 
         inline else => |tmux_action| {
-            if (builtin.os.tag == .windows) exit("tmux is not supported on windows\n");
+            if (builtin.os.tag == .windows) exit(io, "tmux is not supported on windows\n");
 
             const err = tmux.handleTmux(
                 arena,
+                io,
                 @field(tmux.Action, @tagName(tmux_action)),
                 path,
             );
             switch (err) {
-                error.TmuxNotFound => exit("tmux binary not found in path\n"),
+                error.TmuxNotFound => exit(io, "tmux binary not found in path\n"),
                 else => return err,
             }
         },
@@ -352,8 +379,8 @@ const SearchError = ExtractError || walk.SearchError || process.Child.SpawnError
     error{NoProjectsFound};
 
 /// searches for project. returned slice may or may not be the buffer passed in.
-fn searchProject(arena: Allocator, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchError!?[]const u8 {
-    const project_set = try walk.searchProjects(arena, walk_opts.roots, .{
+fn searchProject(arena: Allocator, io: Io, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchError!?[]const u8 {
+    const project_set = try walk.searchProjects(arena, io, walk_opts.roots, .{
         .reporter = walk_opts.reporter,
         .project_markers = walk_opts.project_markers,
     });
@@ -368,11 +395,11 @@ fn searchProject(arena: Allocator, walk_opts: WalkOpts, fzf_opts: FzfOpts) Searc
         return matched_path;
     }
 
-    var fzf_proc = try spawnFzf(arena, fzf_opts.project_query, fzf_opts.preview);
-    errdefer _ = fzf_proc.kill() catch {};
+    var fzf_proc = try spawnFzf(arena, io, fzf_opts.project_query, fzf_opts.preview);
+    errdefer _ = fzf_proc.kill(io) catch {};
 
     var buf: [256]u8 = undefined;
-    var fzf_bw = fzf_proc.stdin.?.writer(&buf);
+    var fzf_bw = fzf_proc.stdin.?.writer(io, &buf);
     const fzf_stdin = &fzf_bw.interface;
 
     for (projects) |project| {
@@ -382,10 +409,10 @@ fn searchProject(arena: Allocator, walk_opts: WalkOpts, fzf_opts: FzfOpts) Searc
 
     try fzf_stdin.flush();
 
-    fzf_proc.stdin.?.close();
+    fzf_proc.stdin.?.close(io);
     fzf_proc.stdin = null;
 
-    return extractProject(&fzf_proc, fzf_opts.path_buf);
+    return extractProject(io, &fzf_proc, fzf_opts.path_buf);
 }
 
 const ExtractError = Reader.DelimiterError || process.Child.WaitError || error{
@@ -394,19 +421,19 @@ const ExtractError = Reader.DelimiterError || process.Child.WaitError || error{
     FzfBadTermination,
 };
 
-fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 {
-    var br = fzf_proc.stdout.?.reader(buf);
+fn extractProject(io: Io, fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 {
+    var br = fzf_proc.stdout.?.reader(io, buf);
     const fzf_reader = &br.interface;
 
     const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
         error.EndOfStream => null,
         else => {
-            _ = fzf_proc.kill() catch {};
+            _ = fzf_proc.kill(io) catch {};
             return err;
         },
     };
 
-    const term = fzf_proc.wait() catch |err| switch (err) {
+    const term = fzf_proc.wait(io) catch |err| switch (err) {
         error.FileNotFound => return error.FzfNotFound,
         else => return err,
     };
@@ -423,7 +450,7 @@ fn extractProject(fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 
 
 const SpawnFzfError = process.Child.SpawnError || error{FzfNotFound};
 
-fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) SpawnFzfError!process.Child {
+fn spawnFzf(gpa: Allocator, io: Io, project: []const u8, preview: []const u8) SpawnFzfError!process.Child {
     var fzf_proc = process.Child.init(&.{
         "fzf",
         "--header=choose a repo",
@@ -439,7 +466,7 @@ fn spawnFzf(gpa: Allocator, project: []const u8, preview: []const u8) SpawnFzfEr
     fzf_proc.stdin_behavior = .Pipe;
     fzf_proc.stdout_behavior = .Pipe;
 
-    fzf_proc.spawn() catch |err| switch (err) {
+    fzf_proc.spawn(io) catch |err| switch (err) {
         error.FileNotFound => return error.FzfNotFound,
         else => return err,
     };

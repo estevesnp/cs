@@ -3,6 +3,7 @@ const mem = std.mem;
 const process = std.process;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 const assert = std.debug.assert;
 
 pub const Action = enum { session, window };
@@ -12,6 +13,7 @@ pub const Error = SessionError || error{TmuxNotFound};
 /// `execv` onto new process, attaching to a tmux session or window.
 pub fn handleTmux(
     gpa: Allocator,
+    io: Io,
     action: Action,
     project_path: []const u8,
 ) Error {
@@ -22,6 +24,7 @@ pub fn handleTmux(
     const err = switch (action) {
         .session => handleTmuxSession(
             gpa,
+            io,
             inside_session,
             project_path,
             session_name,
@@ -65,6 +68,7 @@ const SessionError = process.ExecvError || process.Child.RunError || error{TmuxE
 /// already exists, attach to it instead.
 fn handleTmuxSession(
     gpa: Allocator,
+    io: Io,
     inside_session: bool,
     project_path: []const u8,
     session_name: []const u8,
@@ -74,8 +78,7 @@ fn handleTmuxSession(
     }
 
     // try creating session, ignore if it fails due to duplicate session
-    const res = try process.Child.run(.{
-        .allocator = gpa,
+    const res = try process.Child.run(gpa, io, .{
         .argv = &.{ "tmux", "new", "-ds", session_name, "-c", project_path },
     });
 

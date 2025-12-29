@@ -306,33 +306,35 @@ const Tag = blk: {
     const search_fields = @typeInfo(SearchOpts).@"struct".fields;
 
     const num_fields = cmd_fields.len + search_fields.len;
-    var fields: [num_fields]std.builtin.Type.EnumField = undefined;
+    var field_names: [num_fields][]const u8 = undefined;
+    var field_values: [num_fields]u8 = undefined;
 
     var idx = 0;
     for (cmd_fields) |field| {
         // 'search' isn't a flag
         if (@FieldType(Command, field.name) == SearchOpts) continue;
 
-        fields[idx] = .{ .name = field.name, .value = idx };
+        field_names[idx] = field.name;
+        field_values[idx] = idx;
         idx += 1;
     }
 
     for (search_fields) |field| {
-        fields[idx] = .{ .name = field.name, .value = idx };
+        field_names[idx] = field.name;
+        field_values[idx] = idx;
         idx += 1;
     }
 
     // since we skipped 'search', we have space for 'json'
-    fields[idx] = .{ .name = "json", .value = idx };
+    field_names[idx] = "json";
+    field_values[idx] = idx;
 
-    const enum_info: std.builtin.Type.Enum = .{
-        .tag_type = u8,
-        .fields = &fields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    };
-
-    break :blk @Type(.{ .@"enum" = enum_info });
+    break :blk @Enum(
+        u8,
+        .exhaustive,
+        &field_names,
+        &field_values,
+    );
 };
 
 test "ref all decls" {
