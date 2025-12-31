@@ -9,57 +9,42 @@ const assert = std.debug.assert;
 
 pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
 
-pub const SearchError = Io.File.OpenError || Allocator.Error || Writer.Error;
+pub const SearchError = Io.File.OpenError || Allocator.Error || Writer.Error || Io.Cancelable || Io.QueueClosedError;
 
-/// when to flush the writer
-pub const FlushAfter = enum {
-    /// never flush
-    never,
-    /// only flush at the end of the search
+pub const ProjectMessage = union(enum) {
+    project: []const u8,
     end,
-    /// flush after checking each root path
-    root,
-    /// flush after appending a project
-    project,
 };
 
 pub const SearchOpts = struct {
-    /// optional writer to write paths to
-    writer: ?*Writer = null,
+    /// optional queue to send paths to
+    queue: ?*Io.Queue(ProjectMessage) = null,
     /// optional writer to report to
     reporter: ?*Writer = null,
-    /// when to flush the writer (if it exists)
-    flush_after: FlushAfter = .never,
     /// max depth for searching for projects
     max_depth: usize = 5,
     /// marker to identify if a project exists
     project_markers: []const []const u8 = default_project_markers,
-    /// byte for separating projects in writer
-    separator_byte: u8 = '\n',
 };
 
 const Context = struct {
     projects: std.StringArrayHashMapUnmanaged(void) = .empty,
+    /// the path stack never owns the strings
     path_stack: ArrayList([]const u8) = .empty,
-    /// the check stack never owns the strings
     to_check_stack: ArrayList([]const u8) = .empty,
 
     // config
     max_depth: usize,
     project_markers: []const []const u8,
-    writer: ?*Writer,
+    queue: ?*Io.Queue(ProjectMessage),
     reporter: ?*Writer,
-    flush_after: FlushAfter,
-    separator_byte: u8,
 
     fn init(opts: SearchOpts) Context {
         return .{
             .max_depth = opts.max_depth,
-            .writer = opts.writer,
+            .queue = opts.queue,
             .reporter = opts.reporter,
             .project_markers = if (opts.project_markers.len == 0) default_project_markers else opts.project_markers,
-            .flush_after = opts.flush_after,
-            .separator_byte = opts.separator_byte,
         };
     }
 
@@ -152,15 +137,9 @@ fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOp
 
         try ctx.changeRoot(gpa, root_path);
         try searchDir(gpa, io, &ctx, root_dir, 0);
-
-        if (ctx.flush_after == .root) {
-            if (ctx.writer) |w| try w.flush();
-        }
     }
 
-    if (ctx.flush_after == .end) {
-        if (ctx.writer) |w| try w.flush();
-    }
+    if (ctx.queue) |queue| try queue.putOne(io, .end);
 
     return ctx;
 }
@@ -178,16 +157,11 @@ fn searchDir(gpa: Allocator, io: Io, ctx: *Context, dir: Io.Dir, depth: usize) S
 
             const gop = try ctx.projects.getOrPut(gpa, path_name);
 
-            // a key was already allocated, this one needs to be freed
             if (gop.found_existing) {
+                // a key was already allocated, this one needs to be freed
                 gpa.free(path_name);
             } else {
-                if (ctx.writer) |w| {
-                    try w.writeAll(path_name);
-                    try w.writeByte(ctx.separator_byte);
-
-                    if (ctx.flush_after == .project) try w.flush();
-                }
+                if (ctx.queue) |queue| try queue.putOne(io, .{ .project = path_name });
             }
 
             ctx.popToCheck(gpa, ctx.to_check_stack.items.len - to_check_start_idx);
@@ -446,32 +420,28 @@ fn test_assertProjects(
         proj.* = try fs.path.join(arena, path);
     }
 
-    var alloc_writer: Writer.Allocating = .init(arena);
+    var queue_buf: [100]ProjectMessage = undefined;
+    var queue: Io.Queue(ProjectMessage) = .init(&queue_buf);
+    defer queue.close(testing.io);
 
     var project_set = try searchProjects(testing_allocator, testing.io, roots, .{
-        .writer = &alloc_writer.writer,
-        .flush_after = .end,
+        .queue = &queue,
     });
     defer freeProjects(testing_allocator, &project_set);
 
     const returned_projects = project_set.keys();
+    try testing.expectEqual(expected_projects.len, returned_projects.len);
 
     var written_projects: [][]const u8 = try arena.alloc([]const u8, expected_projects.len);
 
-    var iter = std.mem.splitScalar(u8, alloc_writer.written(), '\n');
-    var idx: usize = 0;
-    while (iter.next()) |proj| : (idx += 1) {
-        if (idx >= returned_projects.len) {
-            // should be the final project
-            try testing.expectEqual(0, proj.len);
-            try testing.expectEqual(null, iter.next());
-            break;
-        }
-        written_projects[idx] = proj;
+    for (0..written_projects.len) |idx| {
+        const proj = try queue.getOne(testing.io);
+
+        try testing.expect(proj == .project);
+        written_projects[idx] = proj.project;
     }
 
-    try testing.expectEqual(expected_projects.len, returned_projects.len);
-    try testing.expectEqual(expected_projects.len, written_projects.len);
+    try testing.expectEqual(.end, try queue.getOne(testing.io));
 
     var returned_not_found = false;
     var written_not_found = false;
