@@ -20,4 +20,6 @@ jobs:
         with:
           version: 0.16.0-dev.1859+212968c57
         # check tests
-      - run: zig build test --summary all
+      - run: |
+          zig build check
+          zig build test --summary all
