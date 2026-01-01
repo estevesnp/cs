@@ -16,6 +16,8 @@ const cli = @import("cli.zig");
 const walk = @import("walk.zig");
 const tmux = @import("tmux.zig");
 
+const ProjectQueue = Io.Queue(walk.ProjectMessage);
+
 const FZF_NO_MATCH_EXIT_CODE: u8 = 1;
 const FZF_INTERRUPT_EXIT_CODE: u8 = 130;
 
@@ -315,9 +317,6 @@ fn search(arena: Allocator, io: Io, reporter: *Writer, search_opts: cli.SearchOp
 
     const preview = search_opts.preview orelse cfg.preview;
 
-    // +1 for the new line
-    var path_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
-
     const walk_opts: WalkOpts = .{
         .roots = cfg.project_roots,
         .project_markers = cfg.project_markers,
@@ -326,7 +325,6 @@ fn search(arena: Allocator, io: Io, reporter: *Writer, search_opts: cli.SearchOp
     const fzf_opts: FzfOpts = .{
         .project_query = search_opts.project,
         .preview = preview,
-        .path_buf = &path_buf,
     };
 
     const path = searchProject(arena, io, walk_opts, fzf_opts) catch |err| switch (err) {
@@ -372,15 +370,54 @@ const WalkOpts = struct {
 const FzfOpts = struct {
     project_query: []const u8,
     preview: []const u8,
-    path_buf: []u8,
 };
 
-const SearchError = ExtractError || walk.SearchError || process.Child.SpawnError ||
+const SearchError = ExtractError || WalkError || SpawnFzfError || Io.ConcurrentError ||
     error{NoProjectsFound};
 
-/// searches for project. returned slice may or may not be the buffer passed in.
 fn searchProject(arena: Allocator, io: Io, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchError!?[]const u8 {
+    var project_queue_buf: [10]walk.ProjectMessage = undefined;
+    var project_queue: ProjectQueue = .init(&project_queue_buf);
+    defer project_queue.close(io);
+
+    var fzf_proc = try spawnFzf(arena, io, fzf_opts.project_query, fzf_opts.preview);
+    defer _ = fzf_proc.kill(io) catch {};
+
+    const fzf_stdin_file = fzf_proc.stdin.?;
+    fzf_proc.stdin = null;
+
+    var walk_future = try io.concurrent(walkAndMatch, .{ arena, io, &project_queue, walk_opts, fzf_opts.project_query });
+    defer _ = walk_future.cancel(io) catch {};
+
+    var extract_future = try io.concurrent(extractFzf, .{ arena, io, &fzf_proc });
+    defer _ = extract_future.cancel(io) catch {};
+
+    var write_future = try io.concurrent(writeToFzf, .{ io, fzf_stdin_file, &project_queue });
+    defer write_future.cancel(io);
+
+    const select = try io.select(.{
+        .walk = &walk_future,
+        .extract = &extract_future,
+    });
+
+    return switch (select) {
+        // if no match found, default to fzf selection
+        .walk => |res| try res orelse try extract_future.await(io),
+        .extract => |res| try res,
+    };
+}
+
+const WalkError = walk.SearchError || error{NoProjectsFound};
+
+fn walkAndMatch(
+    arena: Allocator,
+    io: Io,
+    project_queue: *ProjectQueue,
+    walk_opts: WalkOpts,
+    project_query: []const u8,
+) WalkError!?[]const u8 {
     const project_set = try walk.searchProjects(arena, io, walk_opts.roots, .{
+        .queue = project_queue,
         .reporter = walk_opts.reporter,
         .project_markers = walk_opts.project_markers,
     });
@@ -390,47 +427,21 @@ fn searchProject(arena: Allocator, io: Io, walk_opts: WalkOpts, fzf_opts: FzfOpt
         return error.NoProjectsFound;
     }
 
-    if (matchProject(fzf_opts.project_query, projects)) |matched_path| {
-        // TODO: should we fill the path_buf and return it for consistency?
-        return matched_path;
-    }
-
-    var fzf_proc = try spawnFzf(arena, io, fzf_opts.project_query, fzf_opts.preview);
-    errdefer _ = fzf_proc.kill(io) catch {};
-
-    var buf: [256]u8 = undefined;
-    var fzf_bw = fzf_proc.stdin.?.writer(io, &buf);
-    const fzf_stdin = &fzf_bw.interface;
-
-    for (projects) |project| {
-        try fzf_stdin.writeAll(project);
-        try fzf_stdin.writeByte('\n');
-    }
-
-    try fzf_stdin.flush();
-
-    fzf_proc.stdin.?.close(io);
-    fzf_proc.stdin = null;
-
-    return extractProject(io, &fzf_proc, fzf_opts.path_buf);
+    return matchProject(project_query, projects);
 }
 
-const ExtractError = Reader.DelimiterError || process.Child.WaitError || error{
-    FzfNotFound,
-    FzfNonZeroExitCode,
-    FzfBadTermination,
-};
+const ExtractError = Reader.DelimiterError || process.Child.WaitError || Io.Cancelable || Io.QueueClosedError ||
+    error{ FzfNotFound, FzfNonZeroExitCode, FzfBadTermination };
 
-fn extractProject(io: Io, fzf_proc: *process.Child, buf: []u8) ExtractError!?[]const u8 {
-    var br = fzf_proc.stdout.?.reader(io, buf);
-    const fzf_reader = &br.interface;
+fn extractFzf(arena: Allocator, io: Io, fzf_proc: *process.Child) ExtractError!?[]const u8 {
+    // +1 for the new line
+    var stdout_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
+    var fzf_br = fzf_proc.stdout.?.reader(io, &stdout_buf);
+    const fzf_reader = &fzf_br.interface;
 
     const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
         error.EndOfStream => null,
-        else => {
-            _ = fzf_proc.kill(io) catch {};
-            return err;
-        },
+        else => return err,
     };
 
     const term = fzf_proc.wait(io) catch |err| switch (err) {
@@ -440,12 +451,32 @@ fn extractProject(io: Io, fzf_proc: *process.Child, buf: []u8) ExtractError!?[]c
 
     return switch (term) {
         .Exited => |code| switch (code) {
-            0 => path,
+            0 => try arena.dupe(u8, path orelse return null),
             FZF_NO_MATCH_EXIT_CODE, FZF_INTERRUPT_EXIT_CODE => null,
             else => error.FzfNonZeroExitCode,
         },
         else => error.FzfBadTermination,
     };
+}
+
+fn writeToFzf(io: Io, fzf_stdin_file: Io.File, project_queue: *ProjectQueue) void {
+    var stdin_buf: [256]u8 = undefined;
+    var fzf_bw = fzf_stdin_file.writer(io, &stdin_buf);
+    const fzf_stdin = &fzf_bw.interface;
+
+    while (true) {
+        switch (project_queue.getOne(io) catch return) {
+            .project => |project| {
+                // if write fails, it's likely due to fzf exiting early
+                fzf_stdin.writeAll(project) catch return;
+                fzf_stdin.writeByte('\n') catch return;
+            },
+            .end => break,
+        }
+    }
+
+    fzf_stdin.flush() catch return;
+    fzf_stdin_file.close(io);
 }
 
 const SpawnFzfError = process.Child.SpawnError || error{FzfNotFound};

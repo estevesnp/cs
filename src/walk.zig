@@ -48,6 +48,7 @@ const Context = struct {
         };
     }
 
+    // TODO - remove?
     fn initWithRoot(gpa: Allocator, root_path: []const u8, opts: SearchOpts) !Context {
         var ctx: Context = .init(opts);
         try ctx.path_stack.append(gpa, root_path);
@@ -125,6 +126,7 @@ fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOp
     var ctx: Context = .init(opts);
     errdefer ctx.deinit(gpa);
 
+    // TODO - consider doing in several threads (need to sync projects set, maybe wrapper with queue + mutex?)
     for (root_paths) |root_path| {
         var root_dir = Io.Dir.openDirAbsolute(io, root_path, .{ .iterate = true }) catch |err| switch (err) {
             error.FileNotFound => {
@@ -159,6 +161,7 @@ fn searchDir(gpa: Allocator, io: Io, ctx: *Context, dir: Io.Dir, depth: usize) S
 
             if (gop.found_existing) {
                 // a key was already allocated, this one needs to be freed
+                // TODO - avoid allocating until saving in the first place
                 gpa.free(path_name);
             } else {
                 if (ctx.queue) |queue| try queue.putOne(io, .{ .project = path_name });
