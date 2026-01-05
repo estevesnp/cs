@@ -56,13 +56,8 @@ const USAGE =
     \\
 ;
 
-fn exit(io: Io, msg: []const u8) noreturn {
-    var buf: [100]u8 = undefined;
-    var stderr_bw = File.stderr().writer(io, &buf);
-    const stderr = &stderr_bw.interface;
-
-    stderr.writeAll(msg) catch {};
-    stderr.flush() catch {};
+fn exit(reporter: *Writer, msg: []const u8) noreturn {
+    reporter.writeAll(msg) catch {};
     process.exit(1);
 }
 
@@ -107,17 +102,12 @@ pub fn main() !void {
     }
 }
 
-fn help(io: Io) Writer.Error!void {
-    var buf: [USAGE.len]u8 = undefined;
-    var stdout_writer = File.stdout().writer(io, &buf);
-    const stdout = &stdout_writer.interface;
-
-    try stdout.writeAll(USAGE);
-    try stdout.flush();
+fn help(io: Io) File.Writer.Error!void {
+    try File.stdout().writeStreamingAll(io, USAGE);
 }
 
 fn version(io: Io) Writer.Error!void {
-    var buf: [100]u8 = undefined;
+    var buf: [16]u8 = undefined;
     var stdout_writer = File.stdout().writer(io, &buf);
     const stdout = &stdout_writer.interface;
 
@@ -285,7 +275,9 @@ fn removePaths(arena: Allocator, io: Io, reporter: Reporter, paths: []const []co
     try config.updateConfig(io, cfg_context.config_file, cfg);
 }
 
-fn shellIntegration(arena: Allocator, io: Io, shell: ?cli.Shell) !void {
+const ShellIntegrationError = error{UnsupportedShell} || process.GetEnvVarOwnedError || File.Writer.Error;
+
+fn shellIntegration(arena: Allocator, io: Io, shell: ?cli.Shell) ShellIntegrationError!void {
     const shell_tag = shell orelse blk: {
         const shell_path = try process.getEnvVarOwned(arena, "SHELL");
         const shell_name = fs.path.basename(shell_path);
@@ -297,22 +289,19 @@ fn shellIntegration(arena: Allocator, io: Io, shell: ?cli.Shell) !void {
         .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
     };
 
-    var buf: [100]u8 = undefined;
-    var stdout_writer = File.stdout().writer(io, &buf);
-    const stdout = &stdout_writer.interface;
-
-    try stdout.writeAll(csd_integration);
-    try stdout.flush();
+    try File.stdout().writeStreamingAll(io, csd_integration);
 }
 
-fn search(arena: Allocator, io: Io, reporter: *Writer, search_opts: cli.SearchOpts) !void {
+const SearchError = SearchProjectError || config.OpenConfigError || tmux.Error || File.Writer.Error;
+
+fn search(arena: Allocator, io: Io, reporter: *Writer, search_opts: cli.SearchOpts) SearchError!void {
     var cfg_context = try config.openConfig(arena, io);
     cfg_context.deinit(io);
 
     const cfg = cfg_context.config;
 
     if (cfg.project_roots.len == 0) {
-        exit(io, "no project roots found. add one using the '--add-paths' flag\n");
+        exit(reporter, "no project roots found. add one using the '--add-paths' flag\n");
     }
 
     const preview = search_opts.preview orelse cfg.preview;
@@ -328,24 +317,17 @@ fn search(arena: Allocator, io: Io, reporter: *Writer, search_opts: cli.SearchOp
     };
 
     const path = searchProject(arena, io, walk_opts, fzf_opts) catch |err| switch (err) {
-        error.FzfNotFound => exit(io, "fzf binary not found in path\n"),
-        error.NoProjectsFound => exit(io, "no projects found\n"),
+        error.FzfNotFound => exit(reporter, "fzf binary not found in path\n"),
+        error.NoProjectsFound => exit(reporter, "no projects found\n"),
         else => return err,
     } orelse return;
 
     const action = search_opts.action orelse cfg.action;
     switch (action) {
-        .print => {
-            var stdout_buf: [256]u8 = undefined;
-            var stdout_writer = File.stdout().writer(io, &stdout_buf);
-            const stdout = &stdout_writer.interface;
-
-            try stdout.writeAll(path);
-            try stdout.flush();
-        },
+        .print => try File.stdout().writeStreamingAll(io, path),
 
         inline else => |tmux_action| {
-            if (builtin.os.tag == .windows) exit(io, "tmux is not supported on windows\n");
+            if (builtin.os.tag == .windows) exit(reporter, "tmux is not supported on windows\n");
 
             const err = tmux.handleTmux(
                 arena,
@@ -354,7 +336,7 @@ fn search(arena: Allocator, io: Io, reporter: *Writer, search_opts: cli.SearchOp
                 path,
             );
             switch (err) {
-                error.TmuxNotFound => exit(io, "tmux binary not found in path\n"),
+                error.TmuxNotFound => exit(reporter, "tmux binary not found in path\n"),
                 else => return err,
             }
         },
@@ -372,10 +354,10 @@ const FzfOpts = struct {
     preview: []const u8,
 };
 
-const SearchError = ExtractError || WalkError || SpawnFzfError || Io.ConcurrentError ||
+const SearchProjectError = ExtractError || WalkError || SpawnFzfError || Io.ConcurrentError ||
     error{NoProjectsFound};
 
-fn searchProject(arena: Allocator, io: Io, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchError!?[]const u8 {
+fn searchProject(arena: Allocator, io: Io, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchProjectError!?[]const u8 {
     var project_queue_buf: [10]walk.ProjectMessage = undefined;
     var project_queue: ProjectQueue = .init(&project_queue_buf);
     defer project_queue.close(io);
