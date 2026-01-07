@@ -59,7 +59,7 @@ pub const ArgParseError = error{ IllegalArgument, MissingArgument };
 
 /// parses args. assumes first argument is the program
 /// doesn't own the memory, so is valid as long as the `args` argument
-pub fn parse(diag: *const Diagnostic, args: []const []const u8) ArgParseError!Command {
+pub fn parse(diag: Diagnostic, args: []const []const u8) ArgParseError!Command {
     var iter: ArgIterator = .init(args);
     assert(iter.next() != null);
 
@@ -172,7 +172,7 @@ fn isFlag(arg: []const u8) bool {
 fn getPaths(
     iter: *ArgIterator,
     tag: Tag,
-    diag: *const Diagnostic,
+    diag: Diagnostic,
 ) ArgParseError![]const []const u8 {
     const start = iter.pos;
 
@@ -202,7 +202,7 @@ fn getPaths(
 fn getNextValidArg(
     iter: *ArgIterator,
     tag: Tag,
-    diag: *const Diagnostic,
+    diag: Diagnostic,
 ) ArgParseError![]const u8 {
     const arg = iter.next() orelse {
         diag.report(tag, "expected argument, none found", .{});
@@ -218,7 +218,7 @@ fn getNextValidArg(
 fn validateFirstArg(
     iter: *ArgIterator,
     tag: Tag,
-    diag: *const Diagnostic,
+    diag: Diagnostic,
 ) error{IllegalArgument}!void {
     const arg_pos = iter.pos - 1;
     if (arg_pos != 1) {
@@ -230,7 +230,7 @@ fn validateFirstArg(
 fn validateNoMoreArgs(
     iter: *ArgIterator,
     tag: Tag,
-    diag: *const Diagnostic,
+    diag: Diagnostic,
 ) error{IllegalArgument}!void {
     if (iter.next()) |arg| {
         diag.report(tag, "expected there to be no more arguments, found: {s}", .{arg});
@@ -241,7 +241,7 @@ fn validateNoMoreArgs(
 fn validateSingleArg(
     iter: *ArgIterator,
     tag: Tag,
-    diag: *const Diagnostic,
+    diag: Diagnostic,
 ) error{IllegalArgument}!void {
     try validateFirstArg(iter, tag, diag);
     try validateNoMoreArgs(iter, tag, diag);
@@ -278,7 +278,7 @@ pub const Diagnostic = struct {
     writer: *Writer,
 
     pub fn reportMessage(
-        self: *const Diagnostic,
+        self: Diagnostic,
         comptime fmt: []const u8,
         args: anytype,
     ) void {
@@ -287,7 +287,7 @@ pub const Diagnostic = struct {
     }
 
     pub fn report(
-        self: *const Diagnostic,
+        self: Diagnostic,
         tag: Tag,
         comptime fmt: []const u8,
         args: anytype,
@@ -383,7 +383,7 @@ fn test_failure(args: []const []const u8, comptime expected_message: []const u8,
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
-    try testing.expectError(expected_error, parse(&diag, args));
+    try testing.expectError(expected_error, parse(diag, args));
     try testing.expectEqualStrings(expected_message, writer.written());
 }
 
@@ -409,7 +409,7 @@ test "parse --help correctly" {
 
     const help_flags: []const []const u8 = &.{ "--help", "-h" };
     for (help_flags) |flag| {
-        try testing.expectEqual(.help, try parse(&diag, &.{ "cs", flag }));
+        try testing.expectEqual(.help, try parse(diag, &.{ "cs", flag }));
         try testing.expectEqual(0, writer.written().len);
     }
 }
@@ -439,7 +439,7 @@ test "parse --version correctly" {
 
     const version_flags: []const []const u8 = &.{ "--version", "-v", "-V" };
     for (version_flags) |flag| {
-        try testing.expectEqual(.version, try parse(&diag, &.{ "cs", flag }));
+        try testing.expectEqual(.version, try parse(diag, &.{ "cs", flag }));
         try testing.expectEqual(0, writer.written().len);
     }
 }
@@ -467,7 +467,7 @@ fn test_env(expected_env_fmt: EnvFmt, args: []const []const u8) !void {
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
-    const res = try parse(&diag, args);
+    const res = try parse(diag, args);
 
     try testing.expectEqual(expected_env_fmt, res.env);
     try testing.expectEqual(0, writer.written().len);
@@ -533,7 +533,7 @@ fn test_paths(
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
-    const result = try parse(&diag, args);
+    const result = try parse(diag, args);
 
     const paths = @field(result, @tagName(tag));
 
@@ -611,7 +611,7 @@ fn test_shell(shell: ?Shell, args: []const []const u8) !void {
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
-    const result = try parse(&diag, args);
+    const result = try parse(diag, args);
 
     try testing.expectEqual(shell, result.shell);
     try testing.expectEqual(0, writer.written().len);
@@ -642,7 +642,7 @@ fn test_searchCommand(args: []const []const u8, expected_search_opts: SearchOpts
 
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
-    const result = try parse(&diag, args);
+    const result = try parse(diag, args);
     const search_opts = result.search;
 
     if (expected_search_opts.preview) |preview| {

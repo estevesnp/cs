@@ -10,28 +10,30 @@ pub const Action = enum { session, window };
 pub const Error = SessionError || error{TmuxNotFound};
 
 /// handles the provided `action`, replacing this process by performing an
-/// `execv` onto new process, attaching to a tmux session or window.
+/// `execv` onto new process, attaching to a tmux session or window
 pub fn handleTmux(
     gpa: Allocator,
     io: Io,
+    environ_map: *const process.Environ.Map,
     action: Action,
     project_path: []const u8,
 ) Error {
     var basename_buf: [256]u8 = undefined;
-    const session_name = normalizeBasename(std.fs.path.basename(project_path), &basename_buf);
-    const inside_session = std.posix.getenv("TMUX") != null;
+    const session_name = normalizeBasename(std.Io.Dir.path.basename(project_path), &basename_buf);
+
+    if (environ_map.get("TMUX") == null) {
+        return createAndAttachSession(io, project_path, session_name);
+    }
 
     const err = switch (action) {
         .session => handleTmuxSession(
             gpa,
             io,
-            inside_session,
             project_path,
             session_name,
         ),
         .window => handleTmuxWindow(
-            gpa,
-            inside_session,
+            io,
             project_path,
             session_name,
         ),
@@ -43,51 +45,50 @@ pub fn handleTmux(
     };
 }
 
-/// when outside of a session, attemps to create a new one with `session_name`
-/// starting from `project_path`. if one already exists, attaches to it
-/// instead. fails if inside a session due to session nesting.
+/// when outside of a session, tmux attempts to create a new one with `session_name`
+/// starting from `project_path`. if one already exists, tmux attaches to it
+/// instead. fails if inside a session due to session nesting
 fn createAndAttachSession(
-    gpa: Allocator,
+    io: Io,
     project_path: []const u8,
     session_name: []const u8,
-) process.ExecvError {
-    return process.execv(gpa, &.{
-        "tmux",
-        "new",
-        "-A",
-        "-s",
-        session_name,
-        "-c",
-        project_path,
+) process.ReplaceError {
+    return process.replace(io, .{
+        .argv = &.{
+            "tmux",
+            "new",
+            "-A",
+            "-s",
+            session_name,
+            "-c",
+            project_path,
+        },
     });
 }
 
-const SessionError = process.ExecvError || process.Child.RunError || error{TmuxExitError};
+const SessionError = process.ReplaceError || process.RunError || error{TmuxExitError};
 
-/// create a session with `session_name` starting from `project_path`. if one
-/// already exists, attach to it instead.
+/// create a session with `session_name` starting from `project_path`.
+/// assumes it is already inside a session.
 fn handleTmuxSession(
     gpa: Allocator,
     io: Io,
-    inside_session: bool,
     project_path: []const u8,
     session_name: []const u8,
 ) SessionError {
-    if (!inside_session) {
-        return createAndAttachSession(gpa, project_path, session_name);
-    }
-
-    // try creating session, ignore if it fails due to duplicate session
-    const res = try process.Child.run(gpa, io, .{
+    // TODO - since we don't use stdout, we can just try to capture stderr
+    const new_session_result = try process.run(gpa, io, .{
         .argv = &.{ "tmux", "new", "-ds", session_name, "-c", project_path },
     });
 
-    defer gpa.free(res.stdout);
-    defer gpa.free(res.stderr);
+    defer gpa.free(new_session_result.stdout);
+    defer gpa.free(new_session_result.stderr);
 
-    switch (res.term) {
-        .Exited => |code| if (code != 0) {
-            if (!mem.startsWith(u8, res.stderr, "duplicate session")) {
+    switch (new_session_result.term) {
+        .exited => |code| if (code != 0) {
+            // we can ignore if there is a duplicate session,
+            // since we will join it either way
+            if (!mem.startsWith(u8, new_session_result.stderr, "duplicate session")) {
                 // TODO: diagnostics
                 return error.TmuxExitError;
             }
@@ -96,30 +97,34 @@ fn handleTmuxSession(
         else => return error.TmuxExitError,
     }
 
-    return process.execv(gpa, &.{
-        "tmux",
-        "switch",
-        "-t",
-        session_name,
+    return process.replace(io, .{
+        .argv = &.{
+            "tmux",
+            "switch",
+            "-t",
+            session_name,
+        },
     });
 }
 
 /// create a new window in the existing session with name of `session_name`
-/// starting from the `project_path`. creates a new session if not inside one
-/// already.
+/// starting from the `project_path`.
+/// assumes it is already inside a session.
 fn handleTmuxWindow(
-    gpa: Allocator,
-    inside_session: bool,
+    io: Io,
     project_path: []const u8,
     session_name: []const u8,
-) process.ExecvError {
-    if (!inside_session) {
-        return createAndAttachSession(gpa, project_path, session_name);
-    }
-
-    const args = &.{ "tmux", "new-window", "-c", project_path, "-n", session_name };
-
-    return process.execv(gpa, args);
+) process.ReplaceError {
+    return process.replace(io, .{
+        .argv = &.{
+            "tmux",
+            "new-window",
+            "-c",
+            project_path,
+            "-n",
+            session_name,
+        },
+    });
 }
 
 /// normalizes the basename of a directory for tmux, trimming it and replacing

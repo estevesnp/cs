@@ -154,7 +154,7 @@ fn searchDir(gpa: Allocator, io: Io, ctx: *Context, dir: Io.Dir, depth: usize) S
     var iter = dir.iterate();
     while (try iter.next(io)) |inner| {
         if (anyEql(ctx.project_markers, inner.name)) {
-            const path_name = try fs.path.join(gpa, ctx.path_stack.items);
+            const path_name = try Io.Dir.path.join(gpa, ctx.path_stack.items);
             errdefer gpa.free(path_name);
 
             const gop = try ctx.projects.getOrPut(gpa, path_name);
@@ -375,13 +375,13 @@ test "searchProjects reports properly on non-existing roots" {
     try test_mountNestedTree(tmp_dir);
 
     const root_paths: []const []const u8 = &.{
-        try fs.path.join(gpa, &.{ base_path, "root-2" }),
-        try fs.path.join(gpa, &.{ base_path, "root-4" }),
-        try fs.path.join(gpa, &.{ base_path, "non-existing-dir" }),
+        try Io.Dir.path.join(gpa, &.{ base_path, "root-2" }),
+        try Io.Dir.path.join(gpa, &.{ base_path, "root-4" }),
+        try Io.Dir.path.join(gpa, &.{ base_path, "non-existing-dir" }),
     };
     defer for (root_paths) |p| gpa.free(p);
 
-    const expected_repo = try fs.path.join(gpa, &.{ base_path, "root-2", "proj-2-1" });
+    const expected_repo = try Io.Dir.path.join(gpa, &.{ base_path, "root-2", "proj-2-1" });
     defer gpa.free(expected_repo);
 
     const expected_reported_message = try std.fmt.allocPrint(
@@ -414,13 +414,13 @@ fn test_assertProjects(
 
     const roots = try arena.alloc([]const u8, root_paths.len);
     for (root_paths, roots) |path, *root| {
-        root.* = try fs.path.join(arena, path);
+        root.* = try Io.Dir.path.join(arena, path);
     }
 
     const expected_projects = try arena.alloc([]const u8, expected_projects_paths.len);
 
     for (expected_projects_paths, expected_projects) |path, *proj| {
-        proj.* = try fs.path.join(arena, path);
+        proj.* = try Io.Dir.path.join(arena, path);
     }
 
     var queue_buf: [100]ProjectMessage = undefined;

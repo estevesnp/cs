@@ -41,7 +41,11 @@ description:
 ## config
 
 the config path is `$XDG_CONFIG_HOME/cs/config.json` in linux/mac (with a fallback to `HOME`),
-and `%APPDATA%\cs\config.json` in windows. here is an example config:
+and `%APPDATA%\cs\config.json` in windows.
+
+the config path can be overwritten by setting the `CS_CONFIG_PATH` environment variable.
+
+here is an example config:
 
 ```json
 {
