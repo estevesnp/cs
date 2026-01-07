@@ -116,7 +116,7 @@ fn env(ctx: Context, env_fmt: cli.EnvFmt) EnvError!void {
     try stdout.flush();
 }
 
-fn printEnvTxt(out: *Writer, cfg_path: []const u8, roots: []const []const u8) !void {
+fn printEnvTxt(out: *Writer, cfg_path: []const u8, roots: []const []const u8) Writer.Error!void {
     try out.print("cs config path: {s}\n", .{cfg_path});
     if (roots.len > 0) {
         try out.writeAll("project roots:\n");
@@ -131,7 +131,7 @@ const EnvJson = struct {
     project_roots: []const []const u8,
 };
 
-fn printEnvJson(out: *Writer, cfg_path: []const u8, roots: []const []const u8) !void {
+fn printEnvJson(out: *Writer, cfg_path: []const u8, roots: []const []const u8) Writer.Error!void {
     const schema: EnvJson = .{ .config_path = cfg_path, .project_roots = roots };
     try std.json.Stringify.value(schema, .{ .whitespace = .indent_2 }, out);
 }
@@ -378,8 +378,14 @@ fn searchProject(ctx: Context, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchPro
 
     return switch (select) {
         // if no match found, default to fzf selection
-        .walk => |res| try res orelse try extract_future.await(ctx.io),
-        .extract => |res| try res,
+        .walk => |walk_res| try walk_res orelse {
+            const extracted = try extract_future.await(ctx.io) orelse return null;
+            return try ctx.arena.dupe(u8, extracted);
+        },
+        .extract => |extract_res| {
+            const extracted = try extract_res orelse return null;
+            return try ctx.arena.dupe(u8, extracted);
+        },
     };
 }
 
@@ -406,7 +412,7 @@ fn walkAndMatch(
     return matchProject(project_query, projects);
 }
 
-const ExtractError = Allocator.Error || Reader.DelimiterError || process.Child.WaitError || Io.Cancelable || Io.QueueClosedError ||
+const ExtractError = Reader.DelimiterError || process.Child.WaitError || Io.Cancelable || Io.QueueClosedError ||
     error{ FzfNotFound, FzfNonZeroExitCode, FzfBadTermination };
 
 fn extractFzf(io: Io, out_buf: []u8, fzf_proc: *process.Child) ExtractError!?[]const u8 {
