@@ -354,7 +354,8 @@ fn searchProject(ctx: Context, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchPro
     var project_queue: ProjectQueue = .init(&project_queue_buf);
     defer project_queue.close(ctx.io);
 
-    var fzf_out_buf: [Io.Dir.max_path_bytes]u8 = undefined;
+    // +1 for the new line
+    var fzf_out_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
 
     var fzf_proc = try spawnFzf(ctx.io, fzf_opts.project_query, fzf_opts.preview);
     defer fzf_proc.kill(ctx.io);
@@ -415,24 +416,19 @@ fn walkAndMatch(
 const ExtractError = Reader.DelimiterError || process.Child.WaitError || Io.Cancelable || Io.QueueClosedError ||
     error{ FzfNotFound, FzfNonZeroExitCode, FzfBadTermination };
 
+/// out_buf must be able to read the fzf output
 fn extractFzf(io: Io, out_buf: []u8, fzf_proc: *process.Child) ExtractError!?[]const u8 {
-    // +1 for the new line
-    var stdout_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
-    var fzf_br = fzf_proc.stdout.?.reader(io, &stdout_buf);
+    var fzf_br = fzf_proc.stdout.?.reader(io, out_buf);
     const fzf_reader = &fzf_br.interface;
 
-    const extracted_path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
+    const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
         error.EndOfStream => null,
         else => return err,
     };
 
     return switch (try fzf_proc.wait(io)) {
         .exited => |code| switch (code) {
-            0 => {
-                const path = extracted_path orelse return null;
-                @memcpy(out_buf[0..path.len], path);
-                return out_buf[0..path.len];
-            },
+            0 => return path,
             FZF_NO_MATCH_EXIT_CODE, FZF_INTERRUPT_EXIT_CODE => null,
             else => error.FzfNonZeroExitCode,
         },
@@ -441,6 +437,8 @@ fn extractFzf(io: Io, out_buf: []u8, fzf_proc: *process.Child) ExtractError!?[]c
 }
 
 fn writeToFzf(io: Io, fzf_stdin_file: Io.File, project_queue: *ProjectQueue) void {
+    defer fzf_stdin_file.close(io);
+
     var stdin_buf: [256]u8 = undefined;
     var fzf_bw = fzf_stdin_file.writer(io, &stdin_buf);
     const fzf_stdin = &fzf_bw.interface;
@@ -451,13 +449,11 @@ fn writeToFzf(io: Io, fzf_stdin_file: Io.File, project_queue: *ProjectQueue) voi
                 // if write fails, it's likely due to fzf exiting early
                 fzf_stdin.writeAll(project) catch return;
                 fzf_stdin.writeByte('\n') catch return;
+                fzf_stdin.flush() catch return;
             },
             .end => break,
         }
     }
-
-    fzf_stdin.flush() catch return;
-    fzf_stdin_file.close(io);
 }
 
 const SpawnFzfError = process.SpawnError || error{FzfNotFound};
