@@ -135,5 +135,5 @@ pub fn updateConfig(io: Io, cfg_file: Io.File, cfg: Config) !void {
 }
 
 test "ref all decls" {
-    testing.refAllDeclsRecursive(@This());
+    testing.refAllDecls(@This());
 }

@@ -171,7 +171,7 @@ fn isFlag(arg: []const u8) bool {
 
 fn getPaths(
     iter: *ArgIterator,
-    tag: Tag,
+    tag: @EnumLiteral(),
     diag: Diagnostic,
 ) ArgParseError![]const []const u8 {
     const start = iter.pos;
@@ -201,7 +201,7 @@ fn getPaths(
 /// returns `error.IllegalArgument` if the next argument is a flag (starts with -)
 fn getNextValidArg(
     iter: *ArgIterator,
-    tag: Tag,
+    tag: @EnumLiteral(),
     diag: Diagnostic,
 ) ArgParseError![]const u8 {
     const arg = iter.next() orelse {
@@ -217,7 +217,7 @@ fn getNextValidArg(
 
 fn validateFirstArg(
     iter: *ArgIterator,
-    tag: Tag,
+    tag: @EnumLiteral(),
     diag: Diagnostic,
 ) error{IllegalArgument}!void {
     const arg_pos = iter.pos - 1;
@@ -229,7 +229,7 @@ fn validateFirstArg(
 
 fn validateNoMoreArgs(
     iter: *ArgIterator,
-    tag: Tag,
+    tag: @EnumLiteral(),
     diag: Diagnostic,
 ) error{IllegalArgument}!void {
     if (iter.next()) |arg| {
@@ -240,7 +240,7 @@ fn validateNoMoreArgs(
 
 fn validateSingleArg(
     iter: *ArgIterator,
-    tag: Tag,
+    tag: @EnumLiteral(),
     diag: Diagnostic,
 ) error{IllegalArgument}!void {
     try validateFirstArg(iter, tag, diag);
@@ -288,7 +288,7 @@ pub const Diagnostic = struct {
 
     pub fn report(
         self: Diagnostic,
-        tag: Tag,
+        tag: @EnumLiteral(),
         comptime fmt: []const u8,
         args: anytype,
     ) void {
@@ -297,48 +297,8 @@ pub const Diagnostic = struct {
     }
 };
 
-/// enum derived from the `Command` fields
-/// also contains the `SearchOpts` fields (except for `search`)
-/// also contains `--json` from `--env`
-/// used for tagging diagnostic messages
-const Tag = blk: {
-    const cmd_fields = @typeInfo(Command).@"union".fields;
-    const search_fields = @typeInfo(SearchOpts).@"struct".fields;
-
-    const num_fields = cmd_fields.len + search_fields.len;
-    var field_names: [num_fields][]const u8 = undefined;
-    var field_values: [num_fields]u8 = undefined;
-
-    var idx = 0;
-    for (cmd_fields) |field| {
-        // 'search' isn't a flag
-        if (@FieldType(Command, field.name) == SearchOpts) continue;
-
-        field_names[idx] = field.name;
-        field_values[idx] = idx;
-        idx += 1;
-    }
-
-    for (search_fields) |field| {
-        field_names[idx] = field.name;
-        field_values[idx] = idx;
-        idx += 1;
-    }
-
-    // since we skipped 'search', we have space for 'json'
-    field_names[idx] = "json";
-    field_values[idx] = idx;
-
-    break :blk @Enum(
-        u8,
-        .exhaustive,
-        &field_names,
-        &field_values,
-    );
-};
-
 test "ref all decls" {
-    testing.refAllDeclsRecursive(@This());
+    testing.refAllDecls(@This());
 }
 
 test ArgIterator {

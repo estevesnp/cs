@@ -522,5 +522,5 @@ test matchProject {
 }
 
 test "ref all decls" {
-    testing.refAllDeclsRecursive(@This());
+    testing.refAllDecls(@This());
 }

@@ -49,32 +49,29 @@ pub fn build(b: *std.Build) !void {
         docs_step.dependOn(&docs_install.step);
     }
 
-    { // test
-        const filters = b.option([]const []const u8, "test-filter", "Test filters") orelse &.{};
-        const exe_tests = b.addTest(.{
-            .filters = filters,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/tests.zig"),
-                .target = target,
-                .optimize = optimize,
-            }),
-        });
+    const filters = b.option([]const []const u8, "test-filter", "Test filters") orelse &.{};
+    const exe_tests = b.addTest(.{
+        .filters = filters,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
 
-        exe_tests.root_module.addOptions("options", options);
+    exe_tests.root_module.addOptions("options", options);
 
-        const run_exe_tests = b.addRunArtifact(exe_tests);
+    const run_exe_tests = b.addRunArtifact(exe_tests);
 
-        const test_step = b.step("test", "Run tests");
-        test_step.dependOn(&run_exe_tests.step);
-    }
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_exe_tests.step);
 
-    { // check
-        const check_exe = b.addExecutable(.{
-            .name = "cs",
-            .root_module = mod,
-        });
+    const check_exe = b.addExecutable(.{
+        .name = "cs",
+        .root_module = mod,
+    });
 
-        const check_step = b.step("check", "Check that app compiles");
-        check_step.dependOn(&check_exe.step);
-    }
+    const check_step = b.step("check", "Check that app compiles");
+    check_step.dependOn(&check_exe.step);
+    check_step.dependOn(&exe_tests.step);
 }

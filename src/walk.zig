@@ -584,5 +584,5 @@ fn test_createFilesystem(parent: Io.Dir, node: WalkTest.Node) !void {
 }
 
 test "ref all decls" {
-    testing.refAllDeclsRecursive(@This());
+    testing.refAllDecls(@This());
 }
