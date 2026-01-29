@@ -102,7 +102,9 @@ const GetConfigDirPathError = error{ OutOfMemory, HomeNotFound };
 
 pub fn getConfigDirPath(gpa: Allocator, environ_map: *const process.Environ.Map) GetConfigDirPathError![]u8 {
     if (environ_map.get(CONFIG_PATH_ENV)) |cfg_path| {
-        return gpa.dupe(u8, cfg_path);
+        if (cfg_path.len > 0) {
+            return gpa.dupe(u8, cfg_path);
+        }
     }
 
     switch (builtin.os.tag) {

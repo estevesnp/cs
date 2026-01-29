@@ -33,8 +33,7 @@ const USAGE =
     \\
     \\  -h, --help                       print this message
     \\  -v, -V, --version                print version
-    \\  --env [--json]                   print config and environment information
-    \\                                     accepts --json flag before or after --env
+    \\  --env                            print config and environment information
     \\  -a, --add-paths <path> [...]     update config adding search paths
     \\  -s, --set-paths <path> [...]     update config overriding search paths
     \\  -r, --remove-paths <path> [...]  update config removing search paths
@@ -74,7 +73,7 @@ pub fn main(init: std.process.Init) !void {
     switch (command) {
         .help => try help(ctx.io),
         .version => try version(ctx.io),
-        .env => |e| try env(ctx, e),
+        .env => try env(ctx),
         .@"add-paths" => |paths| try addPaths(ctx, paths),
         .@"set-paths" => |paths| try setPaths(ctx, paths),
         .@"remove-paths" => |paths| try removePaths(ctx, paths),
@@ -98,42 +97,50 @@ fn version(io: Io) Writer.Error!void {
 
 const EnvError = config.OpenConfigError || Writer.Error;
 
-fn env(ctx: Context, env_fmt: cli.EnvFmt) EnvError!void {
+fn env(ctx: Context) EnvError!void {
     var cfg_context = try config.openConfig(ctx.arena, ctx.io, ctx.environ_map);
     defer cfg_context.deinit(ctx.arena, ctx.io);
-
-    const cfg = cfg_context.config;
 
     var stdout_buf: [256]u8 = undefined;
     var stdout_writer = File.stdout().writer(ctx.io, &stdout_buf);
     const stdout = &stdout_writer.interface;
 
-    switch (env_fmt) {
-        .txt => try printEnvTxt(stdout, cfg_context.config_path, cfg.project_roots),
-        .json => try printEnvJson(stdout, cfg_context.config_path, cfg.project_roots),
+    var json_stringify: std.json.Stringify = .{
+        .writer = stdout,
+        .options = .{ .whitespace = .indent_2 },
+    };
+
+    // {
+    //   "config": {
+    //     "project_roots": [
+    //       "/home/esteves/proj"
+    //     ],
+    //     ...
+    //   },
+    //   "env": {
+    //     "CS_CONFIG_PATH": "/home/esteves/.config/cs"
+    //   }
+    // }
+    {
+        try json_stringify.beginObject();
+
+        try json_stringify.objectField("config");
+        try json_stringify.write(cfg_context.config);
+
+        {
+            try json_stringify.objectField("env");
+            try json_stringify.beginObject();
+
+            try json_stringify.objectField(config.CONFIG_PATH_ENV);
+            try json_stringify.write(cfg_context.config_path);
+
+            try json_stringify.endObject();
+        }
+
+        try json_stringify.endObject();
     }
 
     try stdout.flush();
-}
-
-fn printEnvTxt(out: *Writer, cfg_path: []const u8, roots: []const []const u8) Writer.Error!void {
-    try out.print("cs config path: {s}\n", .{cfg_path});
-    if (roots.len > 0) {
-        try out.writeAll("project roots:\n");
-        for (roots) |root| {
-            try out.print("  - {s}\n", .{root});
-        }
-    }
-}
-
-const EnvJson = struct {
-    config_path: []const u8,
-    project_roots: []const []const u8,
-};
-
-fn printEnvJson(out: *Writer, cfg_path: []const u8, roots: []const []const u8) Writer.Error!void {
-    const schema: EnvJson = .{ .config_path = cfg_path, .project_roots = roots };
-    try std.json.Stringify.value(schema, .{ .whitespace = .indent_2 }, out);
 }
 
 const Context = struct {

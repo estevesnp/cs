@@ -16,8 +16,7 @@ flags:
 
   -h, --help                       print this message
   -v, -V, --version                print version
-  --env [--json]                   print config and environment information
-                                     accepts --json flag before or after --env
+  --env                            print config and environment information
   -a, --add-paths <path> [...]     update config adding search paths
   -s, --set-paths <path> [...]     update config overriding search paths
   -r, --remove-paths <path> [...]  update config removing search paths
@@ -81,7 +80,6 @@ eval "$(cs --shell bash)"
 - project marker as cli option?
 - project roots as cli option?
 - tmux script?
-- remake --env --json to normalize parsing
 - propper error diagnostics and error handling
 - native frontend
 - shell completions?
