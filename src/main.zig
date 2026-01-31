@@ -82,6 +82,33 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
+const Context = struct {
+    gpa: Allocator,
+    arena: Allocator,
+    io: Io,
+    environ_map: *const process.Environ.Map,
+    reporter: Reporter,
+
+    fn init(proc_init: process.Init, reporter: *Io.Writer) Context {
+        return .{
+            .gpa = proc_init.gpa,
+            .arena = proc_init.arena.allocator(),
+            .io = proc_init.io,
+            .environ_map = proc_init.environ_map,
+            .reporter = .{ .writer = reporter },
+        };
+    }
+};
+
+const Reporter = struct {
+    writer: *Writer,
+
+    fn report(self: Reporter, comptime fmt: []const u8, args: anytype) void {
+        self.writer.print(fmt ++ "\n", args) catch {};
+        self.writer.flush() catch {};
+    }
+};
+
 fn help(io: Io) File.Writer.Error!void {
     try File.stdout().writeStreamingAll(io, USAGE);
 }
@@ -98,11 +125,14 @@ fn version(io: Io) Writer.Error!void {
 const EnvError = config.OpenConfigError || Writer.Error;
 
 fn env(ctx: Context) EnvError!void {
-    var cfg_context = try config.openConfig(ctx.arena, ctx.io, ctx.environ_map);
-    defer cfg_context.deinit(ctx.arena, ctx.io);
+    const arena = ctx.arena;
+    const io = ctx.io;
+
+    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
+    defer cfg_context.deinit(arena, io);
 
     var stdout_buf: [256]u8 = undefined;
-    var stdout_writer = File.stdout().writer(ctx.io, &stdout_buf);
+    var stdout_writer = File.stdout().writer(io, &stdout_buf);
     const stdout = &stdout_writer.interface;
 
     var json_stringify: std.json.Stringify = .{
@@ -143,55 +173,31 @@ fn env(ctx: Context) EnvError!void {
     try stdout.flush();
 }
 
-const Context = struct {
-    gpa: Allocator,
-    arena: Allocator,
-    io: Io,
-    environ_map: *const process.Environ.Map,
-    reporter: Reporter,
-
-    fn init(proc_init: process.Init, reporter: *Io.Writer) Context {
-        return .{
-            .gpa = proc_init.gpa,
-            .arena = proc_init.arena.allocator(),
-            .io = proc_init.io,
-            .environ_map = proc_init.environ_map,
-            .reporter = .{ .writer = reporter },
-        };
-    }
-};
-
-const Reporter = struct {
-    writer: *Writer,
-
-    fn report(self: Reporter, comptime fmt: []const u8, args: anytype) void {
-        self.writer.print(fmt ++ "\n", args) catch {};
-        self.writer.flush() catch {};
-    }
-};
-
 fn addPaths(ctx: Context, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(ctx.arena, ctx.io, ctx.environ_map);
-    defer cfg_context.deinit(ctx.arena, ctx.io);
+    const arena = ctx.arena;
+    const io = ctx.io;
+
+    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
+    defer cfg_context.deinit(arena, io);
 
     var cfg = cfg_context.config;
 
-    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(ctx.arena, cfg.project_roots, &.{});
-    defer path_set.deinit(ctx.arena);
+    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.project_roots, &.{});
+    defer path_set.deinit(arena);
 
     const cwd = Io.Dir.cwd();
     for (paths) |path| {
         if (path.len == 0) continue;
-        const real_path = cwd.realPathFileAlloc(ctx.io, path, ctx.arena) catch |err| switch (err) {
+        const real_path = cwd.realPathFileAlloc(io, path, arena) catch |err| switch (err) {
             error.FileNotFound => {
                 ctx.reporter.report("{s} not found", .{path});
                 continue;
             },
             else => |e| return e,
         };
-        const gop = try path_set.getOrPut(ctx.arena, real_path);
+        const gop = try path_set.getOrPut(arena, real_path);
         if (gop.found_existing) {
             ctx.reporter.report("root {s} already exists", .{real_path});
         }
@@ -199,24 +205,27 @@ fn addPaths(ctx: Context, paths: []const []const u8) !void {
 
     cfg.project_roots = path_set.keys();
 
-    try config.updateConfig(ctx.io, cfg_context.config_file, cfg);
+    try config.updateConfig(io, cfg_context.config_file, cfg);
 }
 
 fn setPaths(ctx: Context, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(ctx.arena, ctx.io, ctx.environ_map);
-    defer cfg_context.deinit(ctx.arena, ctx.io);
+    const arena = ctx.arena;
+    const io = ctx.io;
+
+    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
+    defer cfg_context.deinit(arena, io);
 
     var cfg = cfg_context.config;
 
     var path_set: std.StringArrayHashMapUnmanaged(void) = .empty;
-    defer path_set.deinit(ctx.arena);
+    defer path_set.deinit(arena);
 
     const cwd = Io.Dir.cwd();
     for (paths) |path| {
         if (path.len == 0) continue;
-        const real_path = cwd.realPathFileAlloc(ctx.io, path, ctx.arena) catch |err| switch (err) {
+        const real_path = cwd.realPathFileAlloc(io, path, arena) catch |err| switch (err) {
             error.FileNotFound => {
                 ctx.reporter.report("{s} not found", .{path});
                 continue;
@@ -224,7 +233,7 @@ fn setPaths(ctx: Context, paths: []const []const u8) !void {
             else => |e| return e,
         };
 
-        const gop = try path_set.getOrPut(ctx.arena, real_path);
+        const gop = try path_set.getOrPut(arena, real_path);
         if (gop.found_existing) {
             ctx.reporter.report("root {s} was already added", .{real_path});
         }
@@ -237,25 +246,28 @@ fn setPaths(ctx: Context, paths: []const []const u8) !void {
 
     cfg.project_roots = path_set.keys();
 
-    try config.updateConfig(ctx.io, cfg_context.config_file, cfg);
+    try config.updateConfig(io, cfg_context.config_file, cfg);
 }
 
 fn removePaths(ctx: Context, paths: []const []const u8) !void {
     assert(paths.len > 0);
 
-    var cfg_context = try config.openConfig(ctx.arena, ctx.io, ctx.environ_map);
-    defer cfg_context.deinit(ctx.arena, ctx.io);
+    const arena = ctx.arena;
+    const io = ctx.io;
+
+    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
+    defer cfg_context.deinit(arena, io);
 
     var cfg = cfg_context.config;
 
-    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(ctx.arena, cfg.project_roots, &.{});
-    defer path_set.deinit(ctx.arena);
+    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.project_roots, &.{});
+    defer path_set.deinit(arena);
 
-    const cwd = try process.currentPathAlloc(ctx.io, ctx.arena);
+    const cwd = try process.currentPathAlloc(io, arena);
     for (paths) |path| {
         if (path.len == 0) continue;
 
-        const resolved = try Io.Dir.path.resolve(ctx.arena, &.{ cwd, path });
+        const resolved = try Io.Dir.path.resolve(arena, &.{ cwd, path });
         const removed = path_set.orderedRemove(resolved);
 
         if (!removed) {
@@ -265,12 +277,14 @@ fn removePaths(ctx: Context, paths: []const []const u8) !void {
 
     cfg.project_roots = path_set.keys();
 
-    try config.updateConfig(ctx.io, cfg_context.config_file, cfg);
+    try config.updateConfig(io, cfg_context.config_file, cfg);
 }
 
 const ShellIntegrationError = error{ UnsupportedShell, ShellNotFound } || File.Writer.Error;
 
 fn shellIntegration(ctx: Context, shell: ?cli.Shell) ShellIntegrationError!void {
+    const io = ctx.io;
+
     const shell_tag = shell orelse blk: {
         const shell_path = ctx.environ_map.get("SHELL") orelse return error.ShellNotFound;
         const shell_name = Io.Dir.path.basename(shell_path);
@@ -282,14 +296,18 @@ fn shellIntegration(ctx: Context, shell: ?cli.Shell) ShellIntegrationError!void 
         .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
     };
 
-    try File.stdout().writeStreamingAll(ctx.io, csd_integration);
+    try File.stdout().writeStreamingAll(io, csd_integration);
 }
 
 const SearchError = SearchProjectError || config.OpenConfigError || tmux.Error || File.Writer.Error;
 
 fn search(ctx: Context, search_opts: cli.SearchOpts) SearchError!void {
-    var cfg_context = try config.openConfig(ctx.arena, ctx.io, ctx.environ_map);
-    cfg_context.deinit(ctx.arena, ctx.io);
+    const gpa = ctx.gpa;
+    const arena = ctx.arena;
+    const io = ctx.io;
+
+    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
+    cfg_context.deinit(arena, io);
 
     const cfg = cfg_context.config;
 
@@ -299,7 +317,7 @@ fn search(ctx: Context, search_opts: cli.SearchOpts) SearchError!void {
 
     const preview = search_opts.preview orelse cfg.preview;
 
-    var walk_arena: std.heap.ArenaAllocator = .init(ctx.gpa);
+    var walk_arena: std.heap.ArenaAllocator = .init(gpa);
     defer walk_arena.deinit();
 
     const walk_opts: WalkOpts = .{
@@ -321,14 +339,14 @@ fn search(ctx: Context, search_opts: cli.SearchOpts) SearchError!void {
 
     const action = search_opts.action orelse cfg.action;
     switch (action) {
-        .print => try File.stdout().writeStreamingAll(ctx.io, path),
+        .print => try File.stdout().writeStreamingAll(io, path),
 
         inline else => |tmux_action| {
             if (builtin.os.tag == .windows) exit(ctx.reporter.writer, "tmux is not supported on windows\n");
 
             const err = tmux.handleTmux(
-                ctx.arena,
-                ctx.io,
+                arena,
+                io,
                 ctx.environ_map,
                 @field(tmux.Action, @tagName(tmux_action)),
                 path,
@@ -357,29 +375,32 @@ const SearchProjectError = ExtractError || WalkError || SpawnFzfError || Io.Conc
     error{NoProjectsFound};
 
 fn searchProject(ctx: Context, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchProjectError!?[]const u8 {
+    const arena = ctx.arena;
+    const io = ctx.io;
+
     var project_queue_buf: [10]walk.ProjectMessage = undefined;
     var project_queue: ProjectQueue = .init(&project_queue_buf);
-    defer project_queue.close(ctx.io);
+    defer project_queue.close(io);
 
     // +1 for the new line
     var fzf_out_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
 
-    var fzf_proc = try spawnFzf(ctx.io, fzf_opts.project_query, fzf_opts.preview);
-    defer fzf_proc.kill(ctx.io);
+    var fzf_proc = try spawnFzf(io, fzf_opts.project_query, fzf_opts.preview);
+    defer fzf_proc.kill(io);
 
     const fzf_stdin_file = fzf_proc.stdin.?;
     fzf_proc.stdin = null;
 
-    var walk_future = try ctx.io.concurrent(walkAndMatch, .{ walk_opts.arena, ctx.io, &project_queue, walk_opts, fzf_opts.project_query });
-    defer _ = walk_future.cancel(ctx.io) catch {};
+    var walk_future = try io.concurrent(walkAndMatch, .{ walk_opts.arena, io, &project_queue, walk_opts, fzf_opts.project_query });
+    defer _ = walk_future.cancel(io) catch {};
 
-    var extract_future = try ctx.io.concurrent(extractFzf, .{ ctx.io, &fzf_out_buf, &fzf_proc });
-    defer _ = extract_future.cancel(ctx.io) catch {};
+    var extract_future = try io.concurrent(extractFzf, .{ io, &fzf_out_buf, &fzf_proc });
+    defer _ = extract_future.cancel(io) catch {};
 
-    var write_future = try ctx.io.concurrent(writeToFzf, .{ ctx.io, fzf_stdin_file, &project_queue });
-    defer write_future.cancel(ctx.io);
+    var write_future = try io.concurrent(writeToFzf, .{ io, fzf_stdin_file, &project_queue });
+    defer write_future.cancel(io);
 
-    const select = try ctx.io.select(.{
+    const select = try io.select(.{
         .walk = &walk_future,
         .extract = &extract_future,
     });
@@ -387,12 +408,12 @@ fn searchProject(ctx: Context, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchPro
     return switch (select) {
         // if no match found, default to fzf selection
         .walk => |walk_res| try walk_res orelse {
-            const extracted = try extract_future.await(ctx.io) orelse return null;
-            return try ctx.arena.dupe(u8, extracted);
+            const extracted = try extract_future.await(io) orelse return null;
+            return try arena.dupe(u8, extracted);
         },
         .extract => |extract_res| {
             const extracted = try extract_res orelse return null;
-            return try ctx.arena.dupe(u8, extracted);
+            return try arena.dupe(u8, extracted);
         },
     };
 }
