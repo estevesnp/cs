@@ -251,7 +251,7 @@ fn removePaths(ctx: Context, paths: []const []const u8) !void {
     var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(ctx.arena, cfg.project_roots, &.{});
     defer path_set.deinit(ctx.arena);
 
-    const cwd = try process.getCwdAlloc(ctx.arena);
+    const cwd = try process.currentPathAlloc(ctx.io, ctx.arena);
     for (paths) |path| {
         if (path.len == 0) continue;
 
