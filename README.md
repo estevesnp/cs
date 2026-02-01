@@ -17,6 +17,10 @@ flags:
   -h, --help                       print this message
   -v, -V, --version                print version
   --env                            print config and environment information
+  --edit [editor]                  open config in editor. if no editor is
+                                   provided, the following env vars are checked:
+                                     - VISUAL
+                                     - EDITOR
   -a, --add-paths <path> [...]     update config adding search paths
   -s, --set-paths <path> [...]     update config overriding search paths
   -r, --remove-paths <path> [...]  update config removing search paths

@@ -19,6 +19,8 @@ pub const Command = union(enum) {
     @"set-paths": []const []const u8,
     /// remove search paths
     @"remove-paths": []const []const u8,
+    // open config in editor
+    edit: ?[]const u8,
     /// shell integration
     shell: ?Shell,
     /// search for projects
@@ -87,6 +89,21 @@ pub fn parse(diag: Diagnostic, args: []const []const u8) ArgParseError!Command {
         if (eqlAny(&.{ "--remove-paths", "-r" }, arg)) {
             try validateFirstArg(&iter, .@"remove-paths", diag);
             return .{ .@"remove-paths" = try getPaths(&iter, .@"remove-paths", diag) };
+        }
+        // edit
+        if (mem.eql(u8, "--edit", arg)) {
+            try validateFirstArg(&iter, .edit, diag);
+
+            if (iter.next()) |editor| {
+                try validateNoMoreArgs(&iter, .edit, diag);
+                if (isFlag(editor)) {
+                    diag.report(.edit, "expected an editor, got flag: {s}", .{editor});
+                    return error.IllegalArgument;
+                }
+                return .{ .edit = editor };
+            }
+
+            return .{ .edit = null };
         }
         //shell
         if (mem.eql(u8, "--shell", arg)) {
@@ -309,19 +326,21 @@ fn test_failure(args: []const []const u8, comptime expected_message: []const u8,
     const diag: Diagnostic = .{ .writer = &writer.writer };
 
     try testing.expectError(expected_error, parse(diag, args));
-    try testing.expectEqualStrings(expected_message, writer.written());
+
+    const message = std.mem.trimEnd(u8, writer.written(), "\r\n");
+    try testing.expectEqualStrings(expected_message, message);
 }
 
 test "correctly fails bad flag" {
     try test_failure(
         &.{ "cs", "--config" },
-        "illegal flag: --config\n",
+        "illegal flag: --config",
         error.IllegalArgument,
     );
 
     try test_failure(
         &.{ "cs", "my_repo", "--verbose" },
-        "illegal flag: --verbose\n",
+        "illegal flag: --verbose",
         error.IllegalArgument,
     );
 }
@@ -344,13 +363,13 @@ test "correctly fails bad --help usage" {
     for (help_flags) |flag| {
         try test_failure(
             &.{ "cs", "my-project", flag },
-            "error parsing 'help' flag: expected to be the first flag, was in position 2\n",
+            "error parsing 'help' flag: expected to be the first flag, was in position 2",
             error.IllegalArgument,
         );
 
         try test_failure(
             &.{ "cs", flag, "my-project" },
-            "error parsing 'help' flag: expected there to be no more arguments, found: my-project\n",
+            "error parsing 'help' flag: expected there to be no more arguments, found: my-project",
             error.IllegalArgument,
         );
     }
@@ -374,13 +393,13 @@ test "correctly fails bad --version usage" {
     for (version_flags) |flag| {
         try test_failure(
             &.{ "cs", "my-project", flag },
-            "error parsing 'version' flag: expected to be the first flag, was in position 2\n",
+            "error parsing 'version' flag: expected to be the first flag, was in position 2",
             error.IllegalArgument,
         );
 
         try test_failure(
             &.{ "cs", flag, "my-project" },
-            "error parsing 'version' flag: expected there to be no more arguments, found: my-project\n",
+            "error parsing 'version' flag: expected there to be no more arguments, found: my-project",
             error.IllegalArgument,
         );
     }
@@ -399,13 +418,13 @@ test "parse --env correctly" {
 test "correctly fails bad --env usage" {
     try test_failure(
         &.{ "cs", "my-project", "--env" },
-        "error parsing 'env' flag: expected to be the first flag, was in position 2\n",
+        "error parsing 'env' flag: expected to be the first flag, was in position 2",
         error.IllegalArgument,
     );
 
     try test_failure(
         &.{ "cs", "--env", "my-project" },
-        "error parsing 'env' flag: expected there to be no more arguments, found: my-project\n",
+        "error parsing 'env' flag: expected there to be no more arguments, found: my-project",
         error.IllegalArgument,
     );
 }
@@ -461,35 +480,66 @@ test "correctly fails bad --add-paths usage" {
         for (flag_set.flags) |flag| {
             try test_failure(
                 &.{ "cs", "my-project", flag, "a/b/c" },
-                "error parsing '" ++ flag_name ++ "' flag: expected to be the first flag, was in position 2\n",
+                "error parsing '" ++ flag_name ++ "' flag: expected to be the first flag, was in position 2",
                 error.IllegalArgument,
             );
 
             try test_failure(
                 &.{ "cs", flag },
-                "error parsing '" ++ flag_name ++ "' flag: no path provided\n",
+                "error parsing '" ++ flag_name ++ "' flag: no path provided",
                 error.MissingArgument,
             );
 
             try test_failure(
                 &.{ "cs", flag, "a/b/c", "--action", "print" },
-                "error parsing '" ++ flag_name ++ "' flag: illegal path: --action\n",
+                "error parsing '" ++ flag_name ++ "' flag: illegal path: --action",
                 error.IllegalArgument,
             );
 
             try test_failure(
                 &.{ "cs", flag, "--help" },
-                "error parsing '" ++ flag_name ++ "' flag: illegal path: --help\n",
+                "error parsing '" ++ flag_name ++ "' flag: illegal path: --help",
                 error.IllegalArgument,
             );
 
             try test_failure(
                 &.{ "cs", flag, "" },
-                "error parsing '" ++ flag_name ++ "' flag: empty path\n",
+                "error parsing '" ++ flag_name ++ "' flag: empty path",
                 error.IllegalArgument,
             );
         }
     }
+}
+
+fn test_edit(edit: ?[]const u8, args: []const []const u8) !void {
+    var writer: Writer.Allocating = .init(testing.allocator);
+    defer writer.deinit();
+
+    const diag: Diagnostic = .{ .writer = &writer.writer };
+
+    const result = try parse(diag, args);
+
+    try testing.expectEqual(edit, result.edit);
+    try testing.expectEqual(0, writer.written().len);
+}
+
+test "parse --edit correctly " {
+    try test_edit("nvim", &.{ "cs", "--edit", "nvim" });
+    try test_edit("foo", &.{ "cs", "--edit", "foo" });
+    try test_edit(null, &.{ "cs", "--edit" });
+}
+
+test "correctly fails bad --edit usage" {
+    try test_failure(
+        &.{ "cs", "--edit", "--help" },
+        "error parsing 'edit' flag: expected an editor, got flag: --help",
+        error.IllegalArgument,
+    );
+    try test_failure(
+        &.{ "cs", "--edit", "nvim", "foo" },
+        "error parsing 'edit' flag: expected there to be no more arguments, found: foo",
+        error.IllegalArgument,
+    );
 }
 
 fn test_shell(shell: ?Shell, args: []const []const u8) !void {
@@ -513,12 +563,12 @@ test "parse --shell correctly " {
 test "correctly fails bad --shell usage" {
     try test_failure(
         &.{ "cs", "--shell", "powershell" },
-        "error parsing 'shell' flag: unsupported shell: powershell\n",
+        "error parsing 'shell' flag: unsupported shell: powershell",
         error.IllegalArgument,
     );
     try test_failure(
         &.{ "cs", "--shell", "zsh", "--json" },
-        "error parsing 'shell' flag: expected there to be no more arguments, found: --json\n",
+        "error parsing 'shell' flag: expected there to be no more arguments, found: --json",
         error.IllegalArgument,
     );
 }
@@ -644,12 +694,12 @@ test "correctly fails bad search command" {
     { // preview
         try test_failure(
             &.{ "cs", "--preview" },
-            "error parsing 'preview' flag: expected argument, none found\n",
+            "error parsing 'preview' flag: expected argument, none found",
             error.MissingArgument,
         );
         try test_failure(
             &.{ "cs", "--preview", "--help" },
-            "error parsing 'preview' flag: illegal argument, not expecting flag: --help\n",
+            "error parsing 'preview' flag: illegal argument, not expecting flag: --help",
             error.IllegalArgument,
         );
     }
@@ -657,12 +707,12 @@ test "correctly fails bad search command" {
     { // action
         try test_failure(
             &.{ "cs", "--action" },
-            "error parsing 'action' flag: expected argument, none found\n",
+            "error parsing 'action' flag: expected argument, none found",
             error.MissingArgument,
         );
         try test_failure(
             &.{ "cs", "--action", "exec" },
-            "error parsing 'action' flag: illegal action: exec\n",
+            "error parsing 'action' flag: illegal action: exec",
             error.IllegalArgument,
         );
     }

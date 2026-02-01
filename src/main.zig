@@ -18,9 +18,6 @@ const tmux = @import("tmux.zig");
 
 const ProjectQueue = Io.Queue(walk.ProjectMessage);
 
-const FZF_NO_MATCH_EXIT_CODE: u8 = 1;
-const FZF_INTERRUPT_EXIT_CODE: u8 = 130;
-
 const USAGE =
     \\usage: cs [project] [flags]
     \\
@@ -37,6 +34,10 @@ const USAGE =
     \\  -a, --add-paths <path> [...]     update config adding search paths
     \\  -s, --set-paths <path> [...]     update config overriding search paths
     \\  -r, --remove-paths <path> [...]  update config removing search paths
+    \\  --edit [editor]                  open config in editor. if no editor is
+    \\                                   provided, the following env vars are checked:
+    \\                                     - VISUAL
+    \\                                     - EDITOR
     \\  --shell [shell]                  print out shell completions.
     \\                                     options: zsh, bash
     \\                                     tries to detect shell if none is provided
@@ -77,6 +78,7 @@ pub fn main(init: std.process.Init) !void {
         .@"add-paths" => |paths| try addPaths(ctx, paths),
         .@"set-paths" => |paths| try setPaths(ctx, paths),
         .@"remove-paths" => |paths| try removePaths(ctx, paths),
+        .edit => |editor| try edit(ctx, editor),
         .shell => |shell| try shellIntegration(ctx, shell),
         .search => |opts| try search(ctx, opts),
     }
@@ -280,6 +282,53 @@ fn removePaths(ctx: Context, paths: []const []const u8) !void {
     try config.updateConfig(io, cfg_context.config_file, cfg);
 }
 
+const visual_env = "VISUAL";
+const editor_env = "EDITOR";
+
+const EditError = error{ NoEditor, BadTermination } || config.OpenConfigError || process.SpawnError;
+
+fn edit(ctx: Context, editor_opt: ?[]const u8) EditError!void {
+    const arena = ctx.arena;
+    const io = ctx.io;
+    const env_map = ctx.environ_map;
+
+    var cfg_ctx = try config.openConfig(arena, io, env_map);
+    cfg_ctx.config_file.close(io);
+
+    const cfg_file_path = try Io.Dir.path.join(arena, &.{ cfg_ctx.config_path, config.CONFIG_FILE_NAME });
+
+    const editor = editor_opt orelse
+        env_map.get(visual_env) orelse
+        env_map.get(editor_env) orelse {
+        ctx.reporter.report("no editor found, either set the '{s}' or '{s}' environment variable", .{ visual_env, editor_env });
+        return error.NoEditor;
+    };
+
+    ctx.reporter.report("opening config with: {s} {s}", .{ editor, cfg_file_path });
+
+    var proc = try process.spawn(io, .{
+        .argv = &.{ editor, cfg_file_path },
+    });
+    const res = try proc.wait(io);
+
+    switch (res) {
+        .exited => |sc| {
+            if (sc != 0) {
+                ctx.reporter.report("{s} exited with non-zero status code: {d}", .{ editor, sc });
+                return error.BadTermination;
+            }
+        },
+        .signal => |sig| {
+            ctx.reporter.report("{s} exited with signal {t}", .{ editor, sig });
+            return error.BadTermination;
+        },
+        else => {
+            ctx.reporter.report("{s} exited with bad termination", .{editor});
+            return error.BadTermination;
+        },
+    }
+}
+
 const ShellIntegrationError = error{ UnsupportedShell, ShellNotFound } || File.Writer.Error;
 
 fn shellIntegration(ctx: Context, shell: ?cli.Shell) ShellIntegrationError!void {
@@ -444,6 +493,9 @@ fn walkAndMatch(
 const ExtractError = Reader.DelimiterError || process.Child.WaitError || Io.Cancelable || Io.QueueClosedError ||
     error{ FzfNotFound, FzfNonZeroExitCode, FzfBadTermination };
 
+const fzf_no_match_sc: u8 = 1;
+const fzf_interrupt_sc: u8 = 130;
+
 /// out_buf must be able to read the fzf output
 fn extractFzf(io: Io, out_buf: []u8, fzf_proc: *process.Child) ExtractError!?[]const u8 {
     var fzf_br = fzf_proc.stdout.?.reader(io, out_buf);
@@ -457,7 +509,7 @@ fn extractFzf(io: Io, out_buf: []u8, fzf_proc: *process.Child) ExtractError!?[]c
     return switch (try fzf_proc.wait(io)) {
         .exited => |code| switch (code) {
             0 => return path,
-            FZF_NO_MATCH_EXIT_CODE, FZF_INTERRUPT_EXIT_CODE => null,
+            fzf_no_match_sc, fzf_interrupt_sc => null,
             else => error.FzfNonZeroExitCode,
         },
         else => error.FzfBadTermination,
