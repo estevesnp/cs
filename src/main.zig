@@ -43,7 +43,7 @@ const USAGE =
     \\                                     tries to detect shell if none is provided
     \\  --no-preview                     disables fzf preview
     \\  --preview <str>                  preview command to pass to fzf
-    \\  --action  <action>               action to execute after finding repository.
+    \\  --action  <action>               action to execute after finding project.
     \\                                     options: session, window, print
     \\                                     can call the action directly, e.g. --print
     \\                                     can also do -w instead of --window
@@ -51,8 +51,8 @@ const USAGE =
     \\
     \\description:
     \\
-    \\  search configured paths for git repositories and run an action on them,
-    \\  such as creating a new tmux session or changing directory to the project
+    \\  search configured paths for projects and run an action on the selection,
+    \\  such as creating a new tmux session from it or printing out it's path
     \\
 ;
 
@@ -545,7 +545,7 @@ fn spawnFzf(io: Io, project: []const u8, preview: []const u8) SpawnFzfError!proc
             "--header=choose a repo",
             "--reverse",
             "--scheme=path",
-            "--preview-label=[ repository files ]",
+            "--preview-label=[ project files ]",
             "--preview",
             preview,
             "--query",
