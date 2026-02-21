@@ -100,6 +100,7 @@ const Context = struct {
 
 /// search for projects and return their full path as a set.
 /// if no arena is used, caller must free the return object. check `freeProjects`
+// TODO - check if we can return []const [:0]const u8 instead for easier FFI compat
 pub fn searchProjects(
     gpa: Allocator,
     io: Io,

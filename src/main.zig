@@ -340,6 +340,8 @@ fn shellIntegration(ctx: Context, shell: ?cli.Shell) ShellIntegrationError!void 
     };
 
     const csd_integration = switch (shell_tag) {
+        // TODO - maybe separate into 2 different files?
+        // TODO - add fish
         .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
     };
 
@@ -420,8 +422,10 @@ const FzfOpts = struct {
 
 const ProjectQueue = Io.Queue(walk.ProjectMessage);
 
-const ProjectResultKind = enum { walk, extract };
-const ResultQueue = Io.Queue(ProjectResultKind);
+const SearchUnion = union(enum) {
+    walk: WalkError!?[]const u8,
+    extract: ExtractError!?[]const u8,
+};
 
 const SearchProjectError = ExtractError || WalkError || SpawnFzfError || Io.ConcurrentError ||
     error{NoProjectsFound};
@@ -443,26 +447,28 @@ fn searchProject(ctx: Context, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchPro
     const fzf_stdin_file = fzf_proc.stdin.?;
     fzf_proc.stdin = null;
 
-    var res_buf: [2]ProjectResultKind = undefined;
-    var res_queue: ResultQueue = .init(&res_buf);
-
-    var walk_future = try io.concurrent(walkAndMatch, .{ walk_opts.arena, io, &project_queue, &res_queue, walk_opts, fzf_opts.project_query });
-    defer _ = walk_future.cancel(io) catch {};
-
-    var extract_future = try io.concurrent(extractFzf, .{ io, &fzf_out_buf, &fzf_proc, &res_queue });
-    defer _ = extract_future.cancel(io) catch {};
-
     var write_future = try io.concurrent(writeToFzf, .{ io, fzf_stdin_file, &project_queue });
     defer write_future.cancel(io);
 
-    switch (try res_queue.getOne(io)) {
-        .walk => return try walk_future.await(io) orelse {
-            const extracted = try extract_future.await(io) orelse return null;
-            return try arena.dupe(u8, extracted);
+    var select_buf: [std.meta.fields(SearchUnion).len]SearchUnion = undefined;
+    var select: Io.Select(SearchUnion) = .init(io, &select_buf);
+    defer select.cancel();
+
+    // TODO - use `select.concurrent` when available
+    select.async(.walk, walkAndMatch, .{ walk_opts.arena, io, &project_queue, walk_opts, fzf_opts.project_query });
+    select.async(.extract, extractFzf, .{ io, &fzf_out_buf, &fzf_proc });
+
+    switch (try select.await()) {
+        .walk => |w| return try w orelse {
+            const project = switch (try select.await()) {
+                .extract => |extracted| try extracted orelse return null,
+                .walk => unreachable,
+            };
+            return try arena.dupe(u8, project);
         },
-        .extract => {
-            const extracted = try extract_future.await(io) orelse return null;
-            return try arena.dupe(u8, extracted);
+        .extract => |extracted| {
+            const project = try extracted orelse return null;
+            return try arena.dupe(u8, project);
         },
     }
 }
@@ -473,12 +479,9 @@ fn walkAndMatch(
     arena: Allocator,
     io: Io,
     project_queue: *ProjectQueue,
-    result_queue: *ResultQueue,
     walk_opts: WalkOpts,
     project_query: []const u8,
 ) WalkError!?[]const u8 {
-    defer result_queue.putOne(io, .walk) catch {};
-
     const project_set = try walk.searchProjects(arena, io, walk_opts.roots, .{
         .queue = project_queue,
         .reporter = walk_opts.reporter,
@@ -499,10 +502,9 @@ const ExtractError = Reader.DelimiterError || process.Child.WaitError || Io.Canc
 const fzf_no_match_sc: u8 = 1;
 const fzf_interrupt_sc: u8 = 130;
 
+/// TODO - when arenas are thread safe, take arena instead of out_buf as arg (https://codeberg.org/ziglang/zig/issues/31186)
 /// out_buf must be able to read the fzf output
-fn extractFzf(io: Io, out_buf: []u8, fzf_proc: *process.Child, result_queue: *ResultQueue) ExtractError!?[]const u8 {
-    defer result_queue.putOne(io, .extract) catch {};
-
+fn extractFzf(io: Io, out_buf: []u8, fzf_proc: *process.Child) ExtractError!?[]const u8 {
     var fzf_br = fzf_proc.stdout.?.reader(io, out_buf);
     const fzf_reader = &fzf_br.interface;
 
