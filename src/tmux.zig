@@ -89,11 +89,12 @@ fn handleTmuxSession(
             // we can ignore if there is a duplicate session,
             // since we will join it either way
             if (!mem.startsWith(u8, new_session_result.stderr, "duplicate session")) {
-                // TODO: diagnostics
+                // TODO - diagnostics
+                // TODO - maybe log instead of erroring out?
                 return error.TmuxExitError;
             }
         },
-        // TODO: diagnostics
+        // TODO - diagnostics
         else => return error.TmuxExitError,
     }
 
