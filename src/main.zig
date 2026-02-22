@@ -422,10 +422,9 @@ const FzfOpts = struct {
 
 const ProjectQueue = Io.Queue(walk.ProjectMessage);
 
-const SearchUnion = union(enum) {
-    walk: WalkError!?[]const u8,
-    extract: ExtractError!?[]const u8,
-};
+fn ReturnType(comptime function: anytype) type {
+    return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
+}
 
 const SearchProjectError = ExtractError || WalkError || SpawnFzfError || Io.ConcurrentError ||
     error{NoProjectsFound};
@@ -450,8 +449,13 @@ fn searchProject(ctx: Context, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchPro
     var write_future = try io.concurrent(writeToFzf, .{ io, fzf_stdin_file, &project_queue });
     defer write_future.cancel(io);
 
-    var select_buf: [std.meta.fields(SearchUnion).len]SearchUnion = undefined;
-    var select: Io.Select(SearchUnion) = .init(io, &select_buf);
+    const U = union(enum) {
+        walk: ReturnType(walkAndMatch),
+        extract: ReturnType(extractFzf),
+    };
+
+    var select_buf: [std.meta.fields(U).len]U = undefined;
+    var select: Io.Select(U) = .init(io, &select_buf);
     defer select.cancel();
 
     // TODO - use `select.concurrent` when available
