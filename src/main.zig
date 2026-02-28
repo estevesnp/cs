@@ -340,6 +340,8 @@ fn shellIntegration(ctx: Context, shell: ?cli.Shell) ShellIntegrationError!void 
     };
 
     const csd_integration = switch (shell_tag) {
+        // TODO - maybe separate into 2 different files?
+        // TODO - add fish
         .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
     };
 
@@ -349,7 +351,6 @@ fn shellIntegration(ctx: Context, shell: ?cli.Shell) ShellIntegrationError!void 
 const SearchError = SearchProjectError || config.OpenConfigError || tmux.Error || File.Writer.Error;
 
 fn search(ctx: Context, search_opts: cli.SearchOpts) SearchError!void {
-    const gpa = ctx.gpa;
     const arena = ctx.arena;
     const io = ctx.io;
 
@@ -364,21 +365,13 @@ fn search(ctx: Context, search_opts: cli.SearchOpts) SearchError!void {
 
     const preview = search_opts.preview orelse cfg.preview;
 
-    var walk_arena: std.heap.ArenaAllocator = .init(gpa);
-    defer walk_arena.deinit();
-
     const walk_opts: WalkOpts = .{
         .roots = cfg.project_roots,
         .project_markers = cfg.project_markers,
         .reporter = ctx.reporter.writer,
-        .arena = walk_arena.allocator(),
-    };
-    const fzf_opts: FzfOpts = .{
-        .project_query = search_opts.project,
-        .preview = preview,
     };
 
-    const path = searchProject(ctx, walk_opts, fzf_opts) catch |err| switch (err) {
+    const path = searchProject(ctx, walk_opts, search_opts.project, preview) catch |err| switch (err) {
         error.FzfNotFound => exit(ctx.reporter.writer, "fzf binary not found in path\n"),
         error.NoProjectsFound => exit(ctx.reporter.writer, "no projects found\n"),
         else => return err,
@@ -410,23 +403,23 @@ const WalkOpts = struct {
     roots: []const []const u8,
     project_markers: []const []const u8,
     reporter: *Writer,
-    arena: Allocator,
-};
-
-const FzfOpts = struct {
-    project_query: []const u8,
-    preview: []const u8,
 };
 
 const ProjectQueue = Io.Queue(walk.ProjectMessage);
 
-const ProjectResultKind = enum { walk, extract };
-const ResultQueue = Io.Queue(ProjectResultKind);
+fn ReturnType(comptime function: anytype) type {
+    return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
+}
 
 const SearchProjectError = ExtractError || WalkError || SpawnFzfError || Io.ConcurrentError ||
     error{NoProjectsFound};
 
-fn searchProject(ctx: Context, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchProjectError!?[]const u8 {
+fn searchProject(
+    ctx: Context,
+    walk_opts: WalkOpts,
+    project_query: []const u8,
+    preview: []const u8,
+) SearchProjectError!?[]const u8 {
     const arena = ctx.arena;
     const io = ctx.io;
 
@@ -434,37 +427,34 @@ fn searchProject(ctx: Context, walk_opts: WalkOpts, fzf_opts: FzfOpts) SearchPro
     var project_queue: ProjectQueue = .init(&project_queue_buf);
     defer project_queue.close(io);
 
-    // +1 for the new line
-    var fzf_out_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
-
-    var fzf_proc = try spawnFzf(io, fzf_opts.project_query, fzf_opts.preview);
+    var fzf_proc = try spawnFzf(io, project_query, preview);
     defer fzf_proc.kill(io);
 
     const fzf_stdin_file = fzf_proc.stdin.?;
     fzf_proc.stdin = null;
 
-    var res_buf: [2]ProjectResultKind = undefined;
-    var res_queue: ResultQueue = .init(&res_buf);
-
-    var walk_future = try io.concurrent(walkAndMatch, .{ walk_opts.arena, io, &project_queue, &res_queue, walk_opts, fzf_opts.project_query });
-    defer _ = walk_future.cancel(io) catch {};
-
-    var extract_future = try io.concurrent(extractFzf, .{ io, &fzf_out_buf, &fzf_proc, &res_queue });
-    defer _ = extract_future.cancel(io) catch {};
-
     var write_future = try io.concurrent(writeToFzf, .{ io, fzf_stdin_file, &project_queue });
     defer write_future.cancel(io);
 
-    switch (try res_queue.getOne(io)) {
-        .walk => return try walk_future.await(io) orelse {
-            const extracted = try extract_future.await(io) orelse return null;
-            return try arena.dupe(u8, extracted);
+    const U = union(enum) {
+        walk: ReturnType(walkAndMatch),
+        extract: ReturnType(extractFzf),
+    };
+
+    var select_buf: [std.meta.fields(U).len]U = undefined;
+    var select: Io.Select(U) = .init(io, &select_buf);
+    defer select.cancelDiscard();
+
+    try select.concurrent(.walk, walkAndMatch, .{ arena, io, &project_queue, walk_opts, project_query });
+    try select.concurrent(.extract, extractFzf, .{ arena, io, &fzf_proc });
+
+    return switch (try select.await()) {
+        .walk => |w| return try w orelse switch (try select.await()) {
+            .extract => |extracted| try extracted,
+            .walk => unreachable,
         },
-        .extract => {
-            const extracted = try extract_future.await(io) orelse return null;
-            return try arena.dupe(u8, extracted);
-        },
-    }
+        .extract => |extracted| try extracted,
+    };
 }
 
 const WalkError = walk.SearchError || error{NoProjectsFound};
@@ -473,12 +463,9 @@ fn walkAndMatch(
     arena: Allocator,
     io: Io,
     project_queue: *ProjectQueue,
-    result_queue: *ResultQueue,
     walk_opts: WalkOpts,
     project_query: []const u8,
 ) WalkError!?[]const u8 {
-    defer result_queue.putOne(io, .walk) catch {};
-
     const project_set = try walk.searchProjects(arena, io, walk_opts.roots, .{
         .queue = project_queue,
         .reporter = walk_opts.reporter,
@@ -493,17 +480,17 @@ fn walkAndMatch(
     return matchProject(project_query, projects);
 }
 
-const ExtractError = Reader.DelimiterError || process.Child.WaitError || Io.Cancelable || Io.QueueClosedError ||
+const ExtractError = Allocator.Error || Reader.DelimiterError || process.Child.WaitError || Io.Cancelable || Io.QueueClosedError ||
     error{ FzfNotFound, FzfNonZeroExitCode, FzfBadTermination };
 
 const fzf_no_match_sc: u8 = 1;
 const fzf_interrupt_sc: u8 = 130;
 
-/// out_buf must be able to read the fzf output
-fn extractFzf(io: Io, out_buf: []u8, fzf_proc: *process.Child, result_queue: *ResultQueue) ExtractError!?[]const u8 {
-    defer result_queue.putOne(io, .extract) catch {};
+fn extractFzf(arena: Allocator, io: Io, fzf_proc: *process.Child) ExtractError!?[]const u8 {
+    // +1 for the new line
+    var buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
 
-    var fzf_br = fzf_proc.stdout.?.reader(io, out_buf);
+    var fzf_br = fzf_proc.stdout.?.reader(io, &buf);
     const fzf_reader = &fzf_br.interface;
 
     const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
@@ -513,7 +500,7 @@ fn extractFzf(io: Io, out_buf: []u8, fzf_proc: *process.Child, result_queue: *Re
 
     return switch (try fzf_proc.wait(io)) {
         .exited => |code| switch (code) {
-            0 => return path,
+            0 => try arena.dupe(u8, path orelse return null),
             fzf_no_match_sc, fzf_interrupt_sc => null,
             else => error.FzfNonZeroExitCode,
         },

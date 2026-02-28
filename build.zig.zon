@@ -2,7 +2,7 @@
     .name = .cs,
     .version = "0.0.0",
     .fingerprint = 0xc6050a1d6e440694,
-    .minimum_zig_version = "0.16.0-dev.2368+380ea6fb5",
+    .minimum_zig_version = "0.16.0-dev.2682+02142a54d",
     .dependencies = .{},
     .paths = .{
         "build.zig",
