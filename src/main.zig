@@ -443,7 +443,7 @@ fn searchProject(
 
     var select_buf: [std.meta.fields(U).len]U = undefined;
     var select: Io.Select(U) = .init(io, &select_buf);
-    defer select.cancel();
+    defer select.cancelDiscard();
 
     try select.concurrent(.walk, walkAndMatch, .{ arena, io, &project_queue, walk_opts, project_query });
     try select.concurrent(.extract, extractFzf, .{ arena, io, &fzf_proc });
