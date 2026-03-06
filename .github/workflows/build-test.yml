@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0-dev.2682+02142a54d
+          version: 0.16.0-dev.2694+74f361a5c
       - run: |
           zig build
           zig build test --summary all
