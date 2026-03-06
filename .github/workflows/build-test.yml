@@ -11,14 +11,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  build-test:
     runs-on: ubuntu-latest
-    name: Check and Test
+    name: Build and Test
     steps:
       - uses: actions/checkout@v3
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0-dev.2368+380ea6fb5
+          version: 0.16.0-dev.2694+74f361a5c
       - run: |
-          zig build check
+          zig build
           zig build test --summary all
