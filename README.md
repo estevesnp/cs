@@ -119,4 +119,3 @@ description:
 - tmux script?
 - propper error diagnostics and error handling
 - native frontend
-- shell completions?

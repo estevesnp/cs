@@ -340,8 +340,6 @@ fn shellIntegration(ctx: Context, shell: ?cli.Shell) ShellIntegrationError!void 
     };
 
     const csd_integration = switch (shell_tag) {
-        // TODO - maybe separate into 2 different files?
-        // TODO - add fish
         .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
     };
 
