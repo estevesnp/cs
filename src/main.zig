@@ -124,6 +124,11 @@ fn version(io: Io) Writer.Error!void {
 
 const EnvError = config.OpenConfigError || Writer.Error;
 
+const Env = struct {
+    config: config.Config,
+    env: config.Env.Struct,
+};
+
 fn env(ctx: Context) EnvError!void {
     const arena = ctx.arena;
     const io = ctx.io;
@@ -135,40 +140,14 @@ fn env(ctx: Context) EnvError!void {
     var stdout_writer = File.stdout().writer(io, &stdout_buf);
     const stdout = &stdout_writer.interface;
 
-    var json_stringify: std.json.Stringify = .{
-        .writer = stdout,
-        .options = .{ .whitespace = .indent_2 },
+    const env_obj: Env = .{
+        .config = cfg_context.config,
+        .env = .{
+            .CS_CONFIG_PATH = cfg_context.config_path,
+        },
     };
 
-    // {
-    //   "config": {
-    //     "project_roots": [
-    //       "/home/esteves/proj"
-    //     ],
-    //     ...
-    //   },
-    //   "env": {
-    //     "CS_CONFIG_PATH": "/home/esteves/.config/cs"
-    //   }
-    // }
-    {
-        try json_stringify.beginObject();
-
-        try json_stringify.objectField("config");
-        try json_stringify.write(cfg_context.config);
-
-        try json_stringify.objectField("env");
-        {
-            try json_stringify.beginObject();
-
-            try json_stringify.objectField(config.CONFIG_PATH_ENV);
-            try json_stringify.write(cfg_context.config_path);
-
-            try json_stringify.endObject();
-        }
-
-        try json_stringify.endObject();
-    }
+    try std.json.Stringify.value(env_obj, .{ .whitespace = .indent_2 }, stdout);
 
     try stdout.flush();
 }

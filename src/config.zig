@@ -14,7 +14,24 @@ const SearchAction = cli.SearchAction;
 
 const APP_NAME = "cs";
 pub const CONFIG_FILE_NAME = "config.json";
-pub const CONFIG_PATH_ENV = "CS_CONFIG_PATH";
+
+pub const Env = enum {
+    CS_CONFIG_PATH,
+
+    pub fn string(self: Env) []const u8 {
+        return @tagName(self);
+    }
+
+    pub const Struct = blk: {
+        const env_fields = @typeInfo(Env).@"enum".fields;
+        var struct_fields: [env_fields.len][]const u8 = undefined;
+        for (env_fields, 0..) |field, idx| {
+            struct_fields[idx] = field.name;
+        }
+
+        break :blk @Struct(.auto, null, &struct_fields, &@splat([]const u8), &@splat(.{}));
+    };
+};
 
 const DEFAULT_FZF_PREVIEW = switch (builtin.os.tag) {
     // works in cmd and powershell
@@ -101,7 +118,7 @@ pub fn openConfigFromPath(gpa: Allocator, io: Io, config_path: []const u8) GetCo
 const GetConfigDirPathError = error{ OutOfMemory, HomeNotFound };
 
 pub fn getConfigDirPath(gpa: Allocator, environ_map: *const process.Environ.Map) GetConfigDirPathError![]u8 {
-    if (environ_map.get(CONFIG_PATH_ENV)) |cfg_path| {
+    if (environ_map.get(Env.CS_CONFIG_PATH.string())) |cfg_path| {
         if (cfg_path.len > 0) {
             return gpa.dupe(u8, cfg_path);
         }
