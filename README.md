@@ -48,7 +48,7 @@ example config:
 {
   "project_roots": ["/home/estevesnp/proj", "/home/estevesnp/pers"],
   "project_markers": [".git", ".jj", ".csm"],
-  "preview": "eza {} -la --color=always",
+  "preview": "eza {} -la --color=always --icons=always --no-permissions --no-filesize --no-user --no-time",
   "action": "session"
 }
 ```
