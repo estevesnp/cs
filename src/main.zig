@@ -157,8 +157,8 @@ fn env(ctx: Context) EnvError!void {
         try json_stringify.objectField("config");
         try json_stringify.write(cfg_context.config);
 
+        try json_stringify.objectField("env");
         {
-            try json_stringify.objectField("env");
             try json_stringify.beginObject();
 
             try json_stringify.objectField(config.CONFIG_PATH_ENV);
