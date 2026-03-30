@@ -28,6 +28,9 @@ pub const SearchOpts = struct {
 };
 
 const Context = struct {
+    gpa: Allocator,
+    io: Io,
+
     projects: std.StringArrayHashMapUnmanaged(void) = .empty,
     /// the path stack never owns the strings
     path_stack: ArrayList([]const u8) = .empty,
@@ -39,8 +42,10 @@ const Context = struct {
     queue: ?*Io.Queue(ProjectMessage),
     reporter: ?*Writer,
 
-    fn init(opts: SearchOpts) Context {
+    fn init(gpa: Allocator, io: Io, opts: SearchOpts) Context {
         return .{
+            .gpa = gpa,
+            .io = io,
             .max_depth = opts.max_depth,
             .queue = opts.queue,
             .reporter = opts.reporter,
@@ -48,14 +53,16 @@ const Context = struct {
         };
     }
 
-    fn initWithRoot(gpa: Allocator, root_path: []const u8, opts: SearchOpts) !Context {
-        var ctx: Context = .init(opts);
+    fn initWithRoot(gpa: Allocator, io: Io, root_path: []const u8, opts: SearchOpts) !Context {
+        var ctx: Context = .init(gpa, io, opts);
         try ctx.path_stack.append(gpa, root_path);
 
         return ctx;
     }
 
-    fn changeRoot(self: *Context, gpa: Allocator, root_path: []const u8) !void {
+    fn changeRoot(self: *Context, root_path: []const u8) !void {
+        const gpa = self.gpa;
+
         // items in this stack are never owned
         self.path_stack.clearRetainingCapacity();
 
@@ -67,10 +74,10 @@ const Context = struct {
         try self.path_stack.append(gpa, root_path);
     }
 
-    fn popToCheck(self: *Context, gpa: Allocator, items_to_pop: usize) void {
+    fn popToCheck(self: *Context, items_to_pop: usize) void {
         for (0..items_to_pop) |_| {
             const field = self.to_check_stack.pop() orelse return;
-            gpa.free(field);
+            self.gpa.free(field);
         }
     }
 
@@ -81,7 +88,9 @@ const Context = struct {
         }
     }
 
-    fn deinit(self: *Context, gpa: Allocator) void {
+    fn deinit(self: *Context) void {
+        const gpa = self.gpa;
+
         // items in this stack are never owned
         self.path_stack.deinit(gpa);
 
@@ -106,7 +115,7 @@ pub fn searchProjects(
     opts: SearchOpts,
 ) SearchError!std.StringArrayHashMapUnmanaged(void) {
     var ctx = try search(gpa, io, root_paths, opts);
-    defer ctx.deinit(gpa);
+    defer ctx.deinit();
 
     return ctx.projects.move();
 }
@@ -122,8 +131,8 @@ pub fn freeProjects(gpa: Allocator, projects: *std.StringArrayHashMapUnmanaged(v
 fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOpts) SearchError!Context {
     assert(root_paths.len > 0);
 
-    var ctx: Context = .init(opts);
-    errdefer ctx.deinit(gpa);
+    var ctx: Context = .init(gpa, io, opts);
+    errdefer ctx.deinit();
 
     for (root_paths) |root_path| {
         var root_dir = Io.Dir.openDirAbsolute(io, root_path, .{ .iterate = true }) catch |err| switch (err) {
@@ -135,8 +144,8 @@ fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOp
         };
         defer root_dir.close(io);
 
-        try ctx.changeRoot(gpa, root_path);
-        try searchDir(gpa, io, &ctx, root_dir, 0);
+        try ctx.changeRoot(root_path);
+        try searchDir(&ctx, root_dir, 0);
     }
 
     if (ctx.queue) |queue| try queue.putOne(io, .end);
@@ -144,7 +153,10 @@ fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOp
     return ctx;
 }
 
-fn searchDir(gpa: Allocator, io: Io, ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
+fn searchDir(ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
+    const gpa = ctx.gpa;
+    const io = ctx.io;
+
     if (depth > ctx.max_depth) return;
 
     const to_check_start_idx = ctx.to_check_stack.items.len;
@@ -164,7 +176,7 @@ fn searchDir(gpa: Allocator, io: Io, ctx: *Context, dir: Io.Dir, depth: usize) S
                 if (ctx.queue) |queue| try queue.putOne(io, .{ .project = path_name });
             }
 
-            ctx.popToCheck(gpa, ctx.to_check_stack.items.len - to_check_start_idx);
+            ctx.popToCheck(ctx.to_check_stack.items.len - to_check_start_idx);
             return;
         }
 
@@ -177,7 +189,7 @@ fn searchDir(gpa: Allocator, io: Io, ctx: *Context, dir: Io.Dir, depth: usize) S
     }
 
     const end_idx = ctx.to_check_stack.items.len;
-    defer ctx.popToCheck(gpa, end_idx - to_check_start_idx);
+    defer ctx.popToCheck(end_idx - to_check_start_idx);
 
     for (to_check_start_idx..end_idx) |idx| {
         const to_check = ctx.to_check_stack.items[idx];
@@ -188,7 +200,7 @@ fn searchDir(gpa: Allocator, io: Io, ctx: *Context, dir: Io.Dir, depth: usize) S
         var dir_to_check = try dir.openDir(io, to_check, .{ .iterate = true });
         defer dir_to_check.close(io);
 
-        try searchDir(gpa, io, ctx, dir_to_check, depth + 1);
+        try searchDir(ctx, dir_to_check, depth + 1);
     }
 }
 
