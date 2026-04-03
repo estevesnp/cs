@@ -107,6 +107,12 @@ const Reporter = struct {
         self.writer.print(fmt ++ "\n", args) catch {};
         self.writer.flush() catch {};
     }
+
+    fn write(self: Reporter, msg: []const u8) void {
+        if (msg.len == 0) return;
+        self.writer.writeAll(msg) catch {};
+        self.writer.flush() catch {};
+    }
 };
 
 fn help(io: Io) File.Writer.Error!void {
@@ -342,17 +348,27 @@ fn search(ctx: Context, search_opts: cli.SearchOpts) SearchError!void {
 
     const preview = search_opts.preview orelse cfg.preview;
 
+    // walk needs it's own reporter so that it doesn't mess with fzf
+    var walk_reporter: Io.Writer.Allocating = .init(arena);
+    defer walk_reporter.deinit();
+
     const walk_opts: WalkOpts = .{
         .roots = cfg.project_roots,
         .project_markers = cfg.project_markers,
-        .reporter = ctx.reporter.writer,
+        .reporter = &walk_reporter.writer,
     };
 
-    const path = searchProject(ctx, walk_opts, search_opts.project, preview) catch |err| switch (err) {
-        error.FzfNotFound => exit(ctx.reporter.writer, "fzf binary not found in path\n"),
-        error.NoProjectsFound => exit(ctx.reporter.writer, "no projects found\n"),
-        else => return err,
-    } orelse return;
+    const pathOpt = searchProject(ctx, walk_opts, search_opts.project, preview) catch |err| {
+        ctx.reporter.write(walk_reporter.written());
+        switch (err) {
+            error.FzfNotFound => exit(ctx.reporter.writer, "fzf binary not found in path\n"),
+            error.NoProjectsFound => exit(ctx.reporter.writer, "no projects found\n"),
+            else => return err,
+        }
+    };
+
+    ctx.reporter.write(walk_reporter.written());
+    const path = pathOpt orelse return;
 
     const action = search_opts.action orelse cfg.action;
     switch (action) {

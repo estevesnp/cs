@@ -135,7 +135,10 @@ fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOp
                 ctx.report("root {s} not found, skipping", .{root_path});
                 continue;
             },
-            else => |e| return e,
+            else => |e| {
+                ctx.report("error opening root {s} ({t}), skipping", .{ root_path, e });
+                continue;
+            },
         };
         defer root_dir.close(io);
 
@@ -157,7 +160,7 @@ fn searchDir(ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
     const to_check_start_idx = ctx.to_check_stack.items.len;
 
     var iter = dir.iterate();
-    while (try iter.next(io)) |inner| {
+    while (iter.next(io) catch null) |inner| {
         if (anyEql(ctx.project_markers, inner.name)) {
             const path_name = try Io.Dir.path.join(gpa, ctx.path_stack.items);
             errdefer gpa.free(path_name);
@@ -192,7 +195,10 @@ fn searchDir(ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
         try ctx.path_stack.append(gpa, to_check);
         defer _ = ctx.path_stack.pop();
 
-        var dir_to_check = try dir.openDir(io, to_check, .{ .iterate = true });
+        var dir_to_check = dir.openDir(io, to_check, .{ .iterate = true }) catch |err| {
+            ctx.report("error opening {f} ({t}), skipping", .{ Io.Dir.path.fmtJoin(ctx.path_stack.items), err });
+            continue;
+        };
         defer dir_to_check.close(io);
 
         try searchDir(ctx, dir_to_check, depth + 1);
