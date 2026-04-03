@@ -11,14 +11,9 @@ pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
 
 pub const SearchError = Io.File.OpenError || Allocator.Error || Writer.Error || Io.Cancelable || Io.QueueClosedError;
 
-pub const ProjectMessage = union(enum) {
-    project: []const u8,
-    end,
-};
-
 pub const SearchOpts = struct {
     /// optional queue to send paths to
-    queue: ?*Io.Queue(ProjectMessage) = null,
+    queue: ?*Io.Queue([]const u8) = null,
     /// optional writer to report to
     reporter: ?*Writer = null,
     /// max depth for searching for projects
@@ -39,7 +34,7 @@ const Context = struct {
     // config
     max_depth: usize,
     project_markers: []const []const u8,
-    queue: ?*Io.Queue(ProjectMessage),
+    queue: ?*Io.Queue([]const u8),
     reporter: ?*Writer,
 
     fn init(gpa: Allocator, io: Io, opts: SearchOpts) Context {
@@ -148,7 +143,7 @@ fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOp
         try searchDir(&ctx, root_dir, 0);
     }
 
-    if (ctx.queue) |queue| try queue.putOne(io, .end);
+    if (ctx.queue) |queue| queue.close(io);
 
     return ctx;
 }
@@ -173,7 +168,7 @@ fn searchDir(ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
                 // a key was already allocated, this one needs to be freed
                 gpa.free(path_name);
             } else {
-                if (ctx.queue) |queue| try queue.putOne(io, .{ .project = path_name });
+                if (ctx.queue) |queue| queue.putOne(io, path_name) catch {};
             }
 
             ctx.popToCheck(ctx.to_check_stack.items.len - to_check_start_idx);
@@ -432,8 +427,8 @@ fn test_assertProjects(
         proj.* = try Io.Dir.path.join(arena, path);
     }
 
-    var queue_buf: [100]ProjectMessage = undefined;
-    var queue: Io.Queue(ProjectMessage) = .init(&queue_buf);
+    var queue_buf: [100][]const u8 = undefined;
+    var queue: Io.Queue([]const u8) = .init(&queue_buf);
     defer queue.close(testing.io);
 
     var project_set = try searchProjects(testing_allocator, testing.io, roots, .{
@@ -447,13 +442,10 @@ fn test_assertProjects(
     var written_projects: [][]const u8 = try arena.alloc([]const u8, expected_projects.len);
 
     for (0..written_projects.len) |idx| {
-        const proj = try queue.getOne(testing.io);
-
-        try testing.expect(proj == .project);
-        written_projects[idx] = proj.project;
+        written_projects[idx] = try queue.getOne(testing.io);
     }
 
-    try testing.expectEqual(.end, try queue.getOne(testing.io));
+    try testing.expectError(error.Closed, queue.getOne(testing.io));
 
     var returned_not_found = false;
     var written_not_found = false;

@@ -382,8 +382,6 @@ const WalkOpts = struct {
     reporter: *Writer,
 };
 
-const ProjectQueue = Io.Queue(walk.ProjectMessage);
-
 fn ReturnType(comptime function: anytype) type {
     return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
 }
@@ -400,8 +398,8 @@ fn searchProject(
     const arena = ctx.arena;
     const io = ctx.io;
 
-    var project_queue_buf: [10]walk.ProjectMessage = undefined;
-    var project_queue: ProjectQueue = .init(&project_queue_buf);
+    var project_queue_buf: [10][]const u8 = undefined;
+    var project_queue: Io.Queue([]const u8) = .init(&project_queue_buf);
     defer project_queue.close(io);
 
     var fzf_proc = try spawnFzf(io, project_query, preview);
@@ -439,7 +437,7 @@ const WalkError = walk.SearchError || error{NoProjectsFound};
 fn walkAndMatch(
     arena: Allocator,
     io: Io,
-    project_queue: *ProjectQueue,
+    project_queue: *Io.Queue([]const u8),
     walk_opts: WalkOpts,
     project_query: []const u8,
 ) WalkError!?[]const u8 {
@@ -485,7 +483,7 @@ fn extractFzf(arena: Allocator, io: Io, fzf_proc: *process.Child) ExtractError!?
     };
 }
 
-fn writeToFzf(io: Io, fzf_stdin_file: Io.File, project_queue: *ProjectQueue) void {
+fn writeToFzf(io: Io, fzf_stdin_file: Io.File, project_queue: *Io.Queue([]const u8)) void {
     defer fzf_stdin_file.close(io);
 
     var stdin_buf: [256]u8 = undefined;
@@ -493,15 +491,11 @@ fn writeToFzf(io: Io, fzf_stdin_file: Io.File, project_queue: *ProjectQueue) voi
     const fzf_stdin = &fzf_bw.interface;
 
     while (true) {
-        switch (project_queue.getOne(io) catch return) {
-            .project => |project| {
-                // if write fails, it's likely due to fzf exiting early
-                fzf_stdin.writeAll(project) catch return;
-                fzf_stdin.writeByte('\n') catch return;
-                fzf_stdin.flush() catch return;
-            },
-            .end => break,
-        }
+        const project = project_queue.getOne(io) catch return;
+        // if write fails, it's likely due to fzf exiting early
+        fzf_stdin.writeAll(project) catch return;
+        fzf_stdin.writeByte('\n') catch return;
+        fzf_stdin.flush() catch return;
     }
 }
 
