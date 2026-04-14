@@ -22,15 +22,7 @@ pub const Env = enum {
         return @tagName(self);
     }
 
-    pub const Struct = blk: {
-        const env_fields = @typeInfo(Env).@"enum".fields;
-        var struct_fields: [env_fields.len][]const u8 = undefined;
-        for (env_fields, 0..) |field, idx| {
-            struct_fields[idx] = field.name;
-        }
-
-        break :blk @Struct(.auto, null, &struct_fields, &@splat([]const u8), &@splat(.{}));
-    };
+    pub const Struct = @Struct(.auto, null, std.meta.fieldNames(Env), &@splat([]const u8), &@splat(.{}));
 };
 
 const DEFAULT_FZF_PREVIEW = switch (builtin.os.tag) {
