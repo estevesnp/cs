@@ -7,6 +7,8 @@ const ArrayList = std.ArrayList;
 const Writer = Io.Writer;
 const assert = std.debug.assert;
 
+const StringSet = std.array_hash_map.String(void);
+
 pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
 
 pub const SearchError = Io.File.OpenError || Allocator.Error || Writer.Error || Io.Cancelable || Io.QueueClosedError;
@@ -26,7 +28,7 @@ const Context = struct {
     gpa: Allocator,
     io: Io,
 
-    projects: std.StringArrayHashMapUnmanaged(void) = .empty,
+    projects: StringSet = .empty,
     /// the path stack never owns the strings
     path_stack: ArrayList([]const u8) = .empty,
     to_check_stack: ArrayList([]const u8) = .empty,
@@ -108,7 +110,7 @@ pub fn searchProjects(
     io: Io,
     root_paths: []const []const u8,
     opts: SearchOpts,
-) SearchError!std.StringArrayHashMapUnmanaged(void) {
+) SearchError!StringSet {
     var ctx = try search(gpa, io, root_paths, opts);
     defer ctx.deinit();
 
@@ -116,7 +118,7 @@ pub fn searchProjects(
 }
 
 /// frees the projects by freeing the keys and de-initing the backing map
-pub fn freeProjects(gpa: Allocator, projects: *std.StringArrayHashMapUnmanaged(void)) void {
+pub fn freeProjects(gpa: Allocator, projects: *StringSet) void {
     for (projects.keys()) |proj| {
         gpa.free(proj);
     }

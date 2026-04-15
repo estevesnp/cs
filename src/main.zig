@@ -16,6 +16,8 @@ const cli = @import("cli.zig");
 const walk = @import("walk.zig");
 const tmux = @import("tmux.zig");
 
+const StringSet = std.array_hash_map.String(void);
+
 const USAGE =
     \\usage: cs [project] [flags]
     \\
@@ -169,7 +171,7 @@ fn addPaths(ctx: Context, paths: []const []const u8) !void {
 
     var cfg = cfg_context.config;
 
-    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.project_roots, &.{});
+    var path_set: StringSet = try .init(arena, cfg.project_roots, &.{});
     defer path_set.deinit(arena);
 
     const cwd = Io.Dir.cwd();
@@ -204,7 +206,7 @@ fn setPaths(ctx: Context, paths: []const []const u8) !void {
 
     var cfg = cfg_context.config;
 
-    var path_set: std.StringArrayHashMapUnmanaged(void) = .empty;
+    var path_set: StringSet = .empty;
     defer path_set.deinit(arena);
 
     const cwd = Io.Dir.cwd();
@@ -245,7 +247,7 @@ fn removePaths(ctx: Context, paths: []const []const u8) !void {
 
     var cfg = cfg_context.config;
 
-    var path_set: std.StringArrayHashMapUnmanaged(void) = try .init(arena, cfg.project_roots, &.{});
+    var path_set: StringSet = try .init(arena, cfg.project_roots, &.{});
     defer path_set.deinit(arena);
 
     const cwd = try process.currentPathAlloc(io, arena);
