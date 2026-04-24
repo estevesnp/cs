@@ -360,7 +360,7 @@ fn search(ctx: Context, search_opts: cli.SearchOpts) SearchError!void {
         .reporter = &walk_reporter.writer,
     };
 
-    const pathOpt = searchProject(ctx, walk_opts, search_opts.project, preview) catch |err| {
+    const path_opt = searchProject(ctx, walk_opts, search_opts.project, preview) catch |err| {
         ctx.reporter.write(walk_reporter.written());
         switch (err) {
             error.FzfNotFound => exit(ctx.reporter.writer, "fzf binary not found in path\n"),
@@ -370,7 +370,7 @@ fn search(ctx: Context, search_opts: cli.SearchOpts) SearchError!void {
     };
 
     ctx.reporter.write(walk_reporter.written());
-    const path = pathOpt orelse return;
+    const path = path_opt orelse return;
 
     const action = search_opts.action orelse cfg.action;
     switch (action) {
