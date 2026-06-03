@@ -434,7 +434,7 @@ fn searchProject(
         extract: ReturnType(extractFzf),
     };
 
-    var select_buf: [std.meta.fields(U).len]U = undefined;
+    var select_buf: [std.meta.fieldNames(U).len]U = undefined;
     var select: Io.Select(U) = .init(io, &select_buf);
     defer select.cancelDiscard();
 
