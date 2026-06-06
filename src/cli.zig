@@ -105,7 +105,7 @@ pub fn parse(diag: Diagnostic, args: []const []const u8) ArgParseError!Command {
 
             return .{ .edit = null };
         }
-        //shell
+        // shell
         if (mem.eql(u8, "--shell", arg)) {
             try validateFirstArg(&iter, .shell, diag);
 

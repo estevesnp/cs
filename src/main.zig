@@ -134,7 +134,7 @@ const EnvError = config.OpenConfigError || Writer.Error;
 
 const Env = struct {
     config: config.Config,
-    env: config.Env.Struct,
+    env: @Struct(.auto, null, std.meta.fieldNames(config.Env), &@splat([]const u8), &@splat(.{})),
 };
 
 fn env(ctx: Context) EnvError!void {
@@ -174,7 +174,7 @@ fn addPaths(ctx: Context, paths: []const []const u8) !void {
     var path_set: StringSet = try .init(arena, cfg.project_roots, &.{});
     defer path_set.deinit(arena);
 
-    const cwd = Io.Dir.cwd();
+    const cwd: Io.Dir = .cwd();
     for (paths) |path| {
         if (path.len == 0) continue;
         const real_path = cwd.realPathFileAlloc(io, path, arena) catch |err| switch (err) {
@@ -209,7 +209,7 @@ fn setPaths(ctx: Context, paths: []const []const u8) !void {
     var path_set: StringSet = .empty;
     defer path_set.deinit(arena);
 
-    const cwd = Io.Dir.cwd();
+    const cwd: Io.Dir = .cwd();
     for (paths) |path| {
         if (path.len == 0) continue;
         const real_path = cwd.realPathFileAlloc(io, path, arena) catch |err| switch (err) {

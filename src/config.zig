@@ -18,11 +18,9 @@ pub const CONFIG_FILE_NAME = "config.json";
 pub const Env = enum {
     CS_CONFIG_PATH,
 
-    pub fn string(self: Env) []const u8 {
-        return @tagName(self);
+    pub fn get(self: Env, env_map: *const process.Environ.Map) ?[]const u8 {
+        return env_map.get(@tagName(self));
     }
-
-    pub const Struct = @Struct(.auto, null, std.meta.fieldNames(Env), &@splat([]const u8), &@splat(.{}));
 };
 
 const DEFAULT_FZF_PREVIEW = switch (builtin.os.tag) {
@@ -110,7 +108,7 @@ pub fn openConfigFromPath(gpa: Allocator, io: Io, config_path: []const u8) GetCo
 const GetConfigDirPathError = error{ OutOfMemory, HomeNotFound };
 
 pub fn getConfigDirPath(gpa: Allocator, environ_map: *const process.Environ.Map) GetConfigDirPathError![]u8 {
-    if (environ_map.get(Env.CS_CONFIG_PATH.string())) |cfg_path| {
+    if (Env.CS_CONFIG_PATH.get(environ_map)) |cfg_path| {
         if (cfg_path.len > 0) {
             return gpa.dupe(u8, cfg_path);
         }
