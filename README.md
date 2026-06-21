@@ -73,6 +73,12 @@ source <(cs --shell zsh)
 eval "$(cs --shell bash)"
 ```
 
+- fish
+
+```fish
+cs --shell fish | source
+```
+
 ## usage
 
 ```

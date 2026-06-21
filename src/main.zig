@@ -328,6 +328,7 @@ fn shellIntegration(ctx: Context, shell: ?cli.Shell) ShellIntegrationError!void 
 
     const csd_integration = switch (shell_tag) {
         .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
+        .fish => @embedFile("shell-integration/shell.fish"),
     };
 
     try File.stdout().writeStreamingAll(io, csd_integration);

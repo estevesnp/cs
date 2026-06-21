@@ -31,6 +31,7 @@ pub const Command = union(enum) {
 pub const Shell = enum {
     bash,
     zsh,
+    fish,
 };
 
 pub const SearchAction = enum {
