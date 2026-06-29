@@ -396,8 +396,7 @@ test "searchProjects reports properly on non-existing roots" {
     const expected_repo = try Io.Dir.path.join(gpa, &.{ base_path, "root-2", "proj-2-1" });
     defer gpa.free(expected_repo);
 
-    const expected_reported_message = try std.fmt.allocPrint(
-        gpa,
+    const expected_reported_message = try gpa.print(
         "root {s} not found, skipping\n",
         .{root_paths[2]},
     );
