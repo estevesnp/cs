@@ -134,7 +134,7 @@ const EnvError = config.OpenConfigError || Writer.Error;
 
 const Env = struct {
     config: config.Config,
-    env: @Struct(.auto, null, std.meta.fieldNames(config.Env), &@splat([]const u8), &@splat(.{})),
+    env: std.enums.EnumFieldStruct(config.Env, []const u8, null),
 };
 
 fn env(ctx: Context) EnvError!void {
