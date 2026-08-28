@@ -1,6 +1,5 @@
 const std = @import("std");
 
-const walk = @import("src/walk.zig");
 const build_zig_zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) !void {
@@ -34,17 +33,6 @@ pub fn build(b: *std.Build) !void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
-
-    { // docs
-        const docs_install = b.addInstallDirectory(.{
-            .source_dir = exe.getEmittedDocs(),
-            .install_dir = .prefix,
-            .install_subdir = "docs",
-        });
-
-        const docs_step = b.step("docs", "Generate docs");
-        docs_step.dependOn(&docs_install.step);
-    }
 
     const filters = b.option([]const []const u8, "test-filter", "Test filters") orelse &.{};
     const exe_tests = b.addTest(.{
