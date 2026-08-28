@@ -1,6 +1,8 @@
 const std = @import("std");
 const mem = std.mem;
 
+const assert = std.debug.assert;
+
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
@@ -18,8 +20,9 @@ pub fn main(init: std.process.Init) !void {
     const cmd = try parseArgs(args);
 
     switch (cmd) {
+        .search => |s| std.debug.print("{f}\n", .{std.json.fmt(s, .{ .whitespace = .indent_2 })}),
         .version => try Io.File.stdout().writeStreamingAll(ctx.io, options.cs_version),
-        else => {},
+        else => std.debug.print("{t}\n", .{cmd}),
     }
 }
 
@@ -36,10 +39,9 @@ fn parseArgs(args: []const []const u8) CmdError!Cmd {
         if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
         if (eqlAny(arg, &.{ "version", "--version", "-v" })) return .version;
         if (mem.eql(u8, arg, "env")) return .env;
+        if (mem.eql(u8, arg, "edit")) return .edit;
 
         if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it) };
-
-        if (!mem.eql(u8, arg, "--") and mem.startsWith(u8, arg, "-")) return CmdError.Usage;
 
         // defaulting to search, so need to un-consume the arg
         it.prev();
@@ -51,11 +53,41 @@ fn parseArgs(args: []const []const u8) CmdError!Cmd {
 }
 
 fn parseSearch(it: *Iter) CmdError!SearchOpts {
-    std.debug.print("parsing search\n", .{});
+    var opts: SearchOpts = .{
+        .path = null,
+        .action = null,
+    };
+
+    var parsing_args = true;
     while (it.next()) |arg| {
-        std.debug.print("  {s}\n", .{arg});
+        if (parsing_args) {
+            if (mem.eql(u8, arg, "--")) {
+                parsing_args = false;
+                continue;
+            }
+            if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
+
+            if (try getNamedArg(it, arg, &.{ "--action", "-a" })) |named| {
+                opts.action = std.meta.stringToEnum(Action, named) orelse
+                    return usageError("invalid action value: {q}", .{named});
+                continue;
+            }
+
+            if (mem.startsWith(u8, arg, "-")) {
+                if (mem.startsWith(u8, arg, "--")) {
+                    if (std.meta.stringToEnum(Action, arg[2..])) |action| {
+                        opts.action = action;
+                        continue;
+                    }
+                }
+                return usageError("invalid flag: {q}", .{arg});
+            }
+        }
+
+        opts.path = arg;
     }
-    return CmdError.Help;
+
+    return opts;
 }
 
 fn eqlAny(needle: []const u8, haystack: []const []const u8) bool {
@@ -69,11 +101,59 @@ const Cmd = union(enum) {
     search: SearchOpts,
     env,
     version,
+    edit,
+};
+
+// TODO - custom action to run with sh -c <templated string>, with option to replace
+const Action = enum {
+    session,
+    window,
+    print,
 };
 
 const SearchOpts = struct {
-    path: []const u8,
+    path: ?[]const u8,
+    action: ?Action,
+    // TODO - preview?
 };
+
+fn usageError(comptime fmt: []const u8, args: anytype) CmdError {
+    std.log.err(fmt, args);
+    return CmdError.Usage;
+}
+
+/// if `arg` matches any of the `flags`, gets a named arg, either from the
+/// argument itself (`--foo=bar`) or from the iterator (`--foo bar`)
+///
+/// if no flag matches, `null` is returned
+///
+/// if any flag matches and no argument is provided, prints explanation and
+/// returns `error.UsageError`
+fn getNamedArg(it: *Iter, arg: []const u8, flags: []const []const u8) CmdError!?[]const u8 {
+    assert(flags.len > 0);
+
+    for (flags) |flag| {
+        if (!mem.startsWith(u8, arg, flag)) continue;
+
+        // exact flag, requires arg
+        if (arg.len == flag.len) return it.next() orelse
+            usageError("flag {q} requires an argument", .{flag});
+
+        // no match
+        if (arg[flag.len] != '=') continue;
+
+        const named_arg = arg[flag.len + 1 ..];
+
+        // no arg after =
+        if (named_arg.len == 0)
+            return usageError("flag {q} requires an argument", .{flag});
+
+        return named_arg;
+    }
+
+    // no flag match
+    return null;
+}
 
 const Iter = struct {
     slice: []const []const u8,
