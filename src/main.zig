@@ -115,6 +115,9 @@ const SearchOpts = struct {
     path: ?[]const u8,
     action: ?Action,
     // TODO - preview?
+    // TODO - max_depth?
+    // TODO - stop iterating on marker match?
+    // TODO - markers?
 };
 
 fn usageError(comptime fmt: []const u8, args: anytype) CmdError {
