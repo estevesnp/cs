@@ -12,6 +12,7 @@ const assert = std.debug.assert;
 pub const StringSet = std.array_hash_map.Custom([:0]const u8, void, std.array_hash_map.StringContext, true);
 
 pub const default_project_markers: []const [:0]const u8 = &.{ ".git", ".jj" };
+pub const default_max_depth = 5;
 
 pub const SearchError =
     error{NoRootPaths} ||
@@ -23,7 +24,7 @@ pub const SearchOpts = struct {
     /// optional writer to report to
     reporter: ?*Writer = null,
     /// max depth for searching for projects
-    max_depth: usize = 5,
+    max_depth: usize = default_max_depth,
     /// marker to identify if a project exists
     project_markers: []const [:0]const u8 = default_project_markers,
 };
@@ -47,7 +48,7 @@ const Context = struct {
         return .{
             .gpa = gpa,
             .io = io,
-            .max_depth = opts.max_depth,
+            .max_depth = if (opts.max_depth == 0) default_max_depth else opts.max_depth,
             .queue = opts.queue,
             .reporter = opts.reporter,
             .project_markers = if (opts.project_markers.len == 0) default_project_markers else opts.project_markers,
