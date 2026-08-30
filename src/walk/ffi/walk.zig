@@ -18,7 +18,7 @@ const SearchOpts = extern struct {
 };
 
 export fn search_projects(root_paths: StringArray, opts: SearchOpts) SearchResult {
-    const gpa = std.heap.c_allocator;
+    const gpa = std.heap.smp_allocator;
 
     var threaded: Io.Threaded = .init_single_threaded;
     const io = threaded.io();
@@ -37,15 +37,17 @@ export fn search_projects(root_paths: StringArray, opts: SearchOpts) SearchResul
 
 export fn free_projects(projects: StringArray) void {
     if (projects == null) return;
-    const gpa = std.heap.c_allocator;
+    const gpa = std.heap.smp_allocator;
 
     const arr_sent_idx = std.mem.findSentinel(?[*:0]const u8, null, projects.?);
+    const allocated_projects: [:null]const ?[*:0]const u8 = projects.?[0..arr_sent_idx :null];
 
-    for (0..arr_sent_idx) |idx| {
-        const c_str = projects.?[idx].?;
-        const str_sent_idx = std.mem.findSentinel(u8, 0, c_str);
-        gpa.free(c_str[0..str_sent_idx :0]);
+    for (allocated_projects) |proj| {
+        const proj_sent_idx = std.mem.findSentinel(u8, 0, proj.?);
+        gpa.free(proj.?[0..proj_sent_idx :0]);
     }
+
+    gpa.free(allocated_projects);
 }
 
 fn searchProjectsNullStrings(

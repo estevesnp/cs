@@ -43,6 +43,7 @@ pub fn build(b: *std.Build) !void {
     if (build_walk) {
         const lib = b.addLibrary(.{
             .name = "walk",
+            .linkage = .dynamic,
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/walk/ffi/walk.zig"),
                 .target = target,
