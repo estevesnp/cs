@@ -11,9 +11,11 @@ const assert = std.debug.assert;
 /// based off of std.array_hash_map.String(void);
 pub const StringSet = std.array_hash_map.Custom([:0]const u8, void, std.array_hash_map.StringContext, true);
 
-pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
+pub const default_project_markers: []const [:0]const u8 = &.{ ".git", ".jj" };
 
-pub const SearchError = Io.File.OpenError || Allocator.Error || Writer.Error || Io.Cancelable || Io.QueueClosedError;
+pub const SearchError =
+    error{NoRootPaths} ||
+    Io.File.OpenError || Allocator.Error || Writer.Error || Io.Cancelable || Io.QueueClosedError;
 
 pub const SearchOpts = struct {
     /// optional queue to send paths to
@@ -23,7 +25,7 @@ pub const SearchOpts = struct {
     /// max depth for searching for projects
     max_depth: usize = 5,
     /// marker to identify if a project exists
-    project_markers: []const []const u8 = default_project_markers,
+    project_markers: []const [:0]const u8 = default_project_markers,
 };
 
 const Context = struct {
@@ -125,7 +127,7 @@ pub fn freeProjects(gpa: Allocator, projects: *StringSet) void {
 }
 
 fn search(gpa: Allocator, io: Io, root_paths: []const [:0]const u8, opts: SearchOpts) SearchError!Context {
-    assert(root_paths.len > 0);
+    if (root_paths.len == 0) return SearchError.NoRootPaths;
 
     var ctx: Context = .init(gpa, io, opts);
     errdefer ctx.deinit();
