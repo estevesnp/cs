@@ -3,21 +3,22 @@ const Io = std.Io;
 
 const walk = @import("walk");
 
-const StringArray = ?[*:null]const ?[*:0]const u8;
+const CStringArray = [*]const [*:0]const u8;
 
 const SearchResult = extern struct {
-    paths: StringArray,
+    paths: CStringArray,
     count: u32,
     ok: bool,
 };
 
 const SearchOpts = extern struct {
-    project_markers: StringArray,
+    project_markers: ?CStringArray,
+    markers_count: u32,
     max_depth: u32,
     enable_logging: bool,
 };
 
-export fn search_projects(root_paths: StringArray, opts: SearchOpts) SearchResult {
+export fn search_projects(root_paths: ?CStringArray, root_count: u32, opts: SearchOpts) SearchResult {
     const gpa = std.heap.smp_allocator;
 
     var threaded: Io.Threaded = .init_single_threaded;
@@ -28,39 +29,34 @@ export fn search_projects(root_paths: StringArray, opts: SearchOpts) SearchResul
     defer if (locked != null) io.unlockStderr();
     const stderr = if (locked) |l| &l.file_writer.interface else null;
 
-    return searchProjectsNullStrings(gpa, io, stderr, root_paths, opts) catch .{
+    return searchProjects(gpa, io, stderr, root_paths, root_count, opts) catch .{
         .count = 0,
         .paths = &.{},
         .ok = false,
     };
 }
 
-export fn free_projects(projects: StringArray) void {
-    if (projects == null) return;
+export fn free_projects(projects: ?CStringArray, count: u32) void {
+    if (projects == null or count == 0) return;
     const gpa = std.heap.smp_allocator;
 
-    const arr_sent_idx = std.mem.findSentinel(?[*:0]const u8, null, projects.?);
-    const allocated_projects: [:null]const ?[*:0]const u8 = projects.?[0..arr_sent_idx :null];
-
-    for (allocated_projects) |proj| {
-        const proj_sent_idx = std.mem.findSentinel(u8, 0, proj.?);
-        gpa.free(proj.?[0..proj_sent_idx :0]);
-    }
-
+    const allocated_projects = projects.?[0..count];
+    for (allocated_projects) |proj| gpa.free(std.mem.sliceTo(proj, 0));
     gpa.free(allocated_projects);
 }
 
-fn searchProjectsNullStrings(
+fn searchProjects(
     gpa: std.mem.Allocator,
     io: Io,
     stderr: ?*Io.Writer,
-    root_paths: StringArray,
+    root_paths: ?CStringArray,
+    root_count: u32,
     opts: SearchOpts,
 ) !SearchResult {
-    const root_paths_bounded = try getBoundedCStringArray(gpa, root_paths);
+    const root_paths_bounded = try getBoundedCStringArray(gpa, root_paths, root_count);
     defer gpa.free(root_paths_bounded);
 
-    const project_markers = try getBoundedCStringArray(gpa, opts.project_markers);
+    const project_markers = try getBoundedCStringArray(gpa, opts.project_markers, opts.markers_count);
     defer gpa.free(project_markers);
 
     var project_set = try walk.searchProjects(gpa, io, root_paths_bounded, .{
@@ -72,27 +68,21 @@ fn searchProjectsNullStrings(
 
     const projects = project_set.keys();
 
-    const paths = try gpa.allocSentinel(?[*:0]const u8, projects.len, null);
+    const paths = try gpa.alloc([*:0]const u8, projects.len);
     for (projects, paths) |k, *p| p.* = k;
 
     return .{
         .count = @intCast(paths.len),
-        .paths = paths,
+        .paths = paths.ptr,
         .ok = true,
     };
 }
 
-fn getBoundedCStringArray(gpa: std.mem.Allocator, arr: StringArray) ![]const [:0]const u8 {
-    if (arr == null) return &.{};
+fn getBoundedCStringArray(gpa: std.mem.Allocator, arr: ?CStringArray, count: u32) ![]const [:0]const u8 {
+    if (arr == null or count == 0) return &.{};
 
-    const arr_sent_idx = std.mem.findSentinel(?[*:0]const u8, null, arr.?);
-
-    const elems = try gpa.alloc([:0]const u8, arr_sent_idx);
-    for (0..arr_sent_idx) |idx| {
-        const c_str = arr.?[idx].?;
-        const str_sent_idx = std.mem.findSentinel(u8, 0, c_str);
-        elems[idx] = c_str[0..str_sent_idx :0];
-    }
+    const elems = try gpa.alloc([:0]const u8, count);
+    for (0..count) |idx| elems[idx] = std.mem.sliceTo(arr.?[idx], 0);
 
     return elems;
 }
