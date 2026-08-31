@@ -2,18 +2,18 @@
 #include <stdint.h>
 
 typedef struct SearchResult {
-    char **paths;
+    const char **paths;
     uint32_t count;
     bool ok;
 } SearchResult;
 
 typedef struct SearchOpts {
-    char **project_markers;
+    const char **project_markers;
     uint32_t markers_count;
     uint32_t max_depth;
     bool enable_logging;
 } SearchOpts;
 
-SearchResult search_projects(char **root_paths, uint32_t root_count, SearchOpts search_opts);
+SearchResult search_projects(const char **root_paths, uint32_t root_count, SearchOpts search_opts);
 
-void free_projects(char **projects, uint32_t project_count);
+void free_projects(const char **projects, uint32_t project_count);
