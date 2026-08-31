@@ -39,13 +39,13 @@ pub fn build(b: *std.Build) !void {
     const run_step = b.step("run", "run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const build_walk = b.option(bool, "libwalk", "build lib for walk.zig") orelse false;
+    const build_walk = b.option(bool, "libcswalk", "build libcswalk") orelse false;
     if (build_walk) {
         const lib = b.addLibrary(.{
-            .name = "walk",
+            .name = "cswalk",
             .linkage = .dynamic,
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/walk/ffi/walk.zig"),
+                .root_source_file = b.path("src/walk/ffi/cswalk.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{.{ .name = "walk", .module = walk_mod }},

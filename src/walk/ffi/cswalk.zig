@@ -5,20 +5,20 @@ const walk = @import("walk");
 
 const CStringArray = [*]const [*:0]const u8;
 
-const SearchResult = extern struct {
+const CsSearchResult = extern struct {
     paths: CStringArray,
     count: u32,
     ok: bool,
 };
 
-const SearchOpts = extern struct {
+const CsSearchOpts = extern struct {
     project_markers: ?CStringArray,
     markers_count: u32,
     max_depth: u32,
     enable_logging: bool,
 };
 
-export fn search_projects(root_paths: ?CStringArray, root_count: u32, opts: SearchOpts) SearchResult {
+export fn cs_search_projects(root_paths: ?CStringArray, root_count: u32, opts: CsSearchOpts) CsSearchResult {
     const gpa = std.heap.smp_allocator;
 
     var threaded: Io.Threaded = .init_single_threaded;
@@ -36,7 +36,7 @@ export fn search_projects(root_paths: ?CStringArray, root_count: u32, opts: Sear
     };
 }
 
-export fn free_projects(projects: ?CStringArray, count: u32) void {
+export fn cs_free_projects(projects: ?CStringArray, count: u32) void {
     if (projects == null or count == 0) return;
     const gpa = std.heap.smp_allocator;
 
@@ -51,8 +51,8 @@ fn searchProjects(
     stderr: ?*Io.Writer,
     root_paths: ?CStringArray,
     root_count: u32,
-    opts: SearchOpts,
-) !SearchResult {
+    opts: CsSearchOpts,
+) !CsSearchResult {
     const root_paths_bounded = try getBoundedCStringArray(gpa, root_paths, root_count);
     defer gpa.free(root_paths_bounded);
 
