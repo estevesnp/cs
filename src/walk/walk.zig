@@ -11,7 +11,7 @@ const assert = std.debug.assert;
 /// based off of std.array_hash_map.String(void);
 pub const StringSet = std.array_hash_map.Custom([:0]const u8, void, std.array_hash_map.StringContext, true);
 
-pub const default_project_markers: []const [:0]const u8 = &.{ ".git", ".jj" };
+pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
 pub const default_max_depth = 5;
 
 pub const SearchError =
@@ -26,7 +26,7 @@ pub const SearchOpts = struct {
     /// max depth for searching for projects
     max_depth: usize = default_max_depth,
     /// marker to identify if a project exists
-    project_markers: []const [:0]const u8 = default_project_markers,
+    project_markers: []const []const u8 = default_project_markers,
 };
 
 const Context = struct {
@@ -110,7 +110,7 @@ const Context = struct {
 pub fn searchProjects(
     gpa: Allocator,
     io: Io,
-    root_paths: []const [:0]const u8,
+    root_paths: []const []const u8,
     opts: SearchOpts,
 ) SearchError!StringSet {
     var ctx = try search(gpa, io, root_paths, opts);
@@ -127,7 +127,7 @@ pub fn freeProjects(gpa: Allocator, projects: *StringSet) void {
     projects.deinit(gpa);
 }
 
-fn search(gpa: Allocator, io: Io, root_paths: []const [:0]const u8, opts: SearchOpts) SearchError!Context {
+fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOpts) SearchError!Context {
     if (root_paths.len == 0) return SearchError.NoRootPaths;
 
     var ctx: Context = .init(gpa, io, opts);
@@ -388,7 +388,7 @@ test "searchProjects reports properly on non-existing roots" {
 
     try test_mountNestedTree(tmp_dir);
 
-    const root_paths: []const [:0]const u8 = &.{
+    const root_paths: []const []const u8 = &.{
         try Io.Dir.path.joinZ(gpa, &.{ base_path, "root-2" }),
         try Io.Dir.path.joinZ(gpa, &.{ base_path, "root-4" }),
         try Io.Dir.path.joinZ(gpa, &.{ base_path, "non-existing-dir" }),
@@ -425,7 +425,7 @@ fn test_assertProjects(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const roots = try arena.alloc([:0]const u8, root_paths.len);
+    const roots = try arena.alloc([]const u8, root_paths.len);
     for (root_paths, roots) |path, *root| {
         root.* = try Io.Dir.path.joinZ(arena, path);
     }

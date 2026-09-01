@@ -7,20 +7,26 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const options = @import("options");
+const walk = @import("walk");
 
 pub fn main(init: std.process.Init) !void {
-    const ctx: Ctx = .{
-        .io = init.io,
-        .gpa = init.gpa,
-        .arena = init.arena.allocator(),
-    };
+    var stdout_buf: [128]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(init.io, &stdout_buf);
+
+    var stderr_buf: [128]u8 = undefined;
+    var stderr = Io.File.stderr().writerStreaming(init.io, &stderr_buf);
+
+    const ctx: Ctx = .init(init, &stdout.interface, &stderr.interface);
 
     const args = try init.minimal.args.toSlice(ctx.arena);
 
-    const cmd = try parseArgs(args);
+    const cmd = parseArgs(args) catch |err| switch (err) {
+        error.Help => writeHelpAndExit(ctx.stdout, 0),
+        error.Usage => writeHelpAndExit(ctx.stderr, 1),
+    };
 
     switch (cmd) {
-        .search => |s| std.debug.print("{f}\n", .{std.json.fmt(s, .{ .whitespace = .indent_2 })}),
+        .search => |opts| try search(ctx, opts),
         .version => try Io.File.stdout().writeStreamingAll(ctx.io, options.cs_version),
         else => std.debug.print("{t}\n", .{cmd}),
     }
@@ -30,8 +36,80 @@ const Ctx = struct {
     io: Io,
     gpa: Allocator,
     arena: Allocator,
+    environ_map: *std.process.Environ.Map,
+
+    stdout: *Io.Writer,
+    stderr: *Io.Writer,
+
+    fn init(proc_init: std.process.Init, stdout: *Io.Writer, stderr: *Io.Writer) Ctx {
+        return .{
+            .io = proc_init.io,
+            .gpa = proc_init.gpa,
+            .arena = proc_init.arena.allocator(),
+            .environ_map = proc_init.environ_map,
+            .stdout = stdout,
+            .stderr = stderr,
+        };
+    }
 };
 
+fn writeHelpAndExit(writer: *Io.Writer, status: u8) noreturn {
+    writer.writeAll(usage) catch {};
+    writer.flush() catch {};
+    std.process.exit(status);
+}
+
+const usage =
+    \\usage: cs [action] [flags]
+    \\
+    \\subcommands:
+    \\
+    \\  search                     search for project
+    \\  env                        print config and environment information
+    \\  edit                       edit config
+    \\  version                    print version. also accepts --version and -v
+    \\  help                       print this message. also accepts --help and -h
+    \\
+    \\search:
+    \\
+    \\  usage: cs [search] [flags] [project]
+    \\
+    \\  arguments:
+    \\    project                  query to pre-fill picker. if it has an exact match
+    \\                             to any project, instantly selects it
+    \\
+    \\  flags:
+    \\    -a, --action <action>    select action to perform on project selection.
+    \\                             can also choose the action directly, like --print.
+    \\                             options: session, window, print
+    \\
+;
+
+const CmdError = error{ Help, Usage };
+
+const Cmd = union(enum) {
+    search: SearchOpts,
+    env,
+    edit,
+    version,
+};
+
+// TODO - custom action to run with sh -c <templated string>, with option to replace
+const Action = enum {
+    session,
+    window,
+    print,
+};
+
+const SearchOpts = struct {
+    query: ?[]const u8,
+    preview: ?[]const u8,
+    max_depth: ?usize,
+    action: ?Action,
+    // TODO - stop iterating on marker match?
+    // TODO - roots?
+    // TODO - markers?
+};
 fn parseArgs(args: []const []const u8) CmdError!Cmd {
     var it: Iter = .init(args[1..]);
 
@@ -54,7 +132,9 @@ fn parseArgs(args: []const []const u8) CmdError!Cmd {
 
 fn parseSearch(it: *Iter) CmdError!SearchOpts {
     var opts: SearchOpts = .{
-        .path = null,
+        .query = null,
+        .preview = null,
+        .max_depth = null,
         .action = null,
     };
 
@@ -73,6 +153,17 @@ fn parseSearch(it: *Iter) CmdError!SearchOpts {
                 continue;
             }
 
+            if (try getNamedArg(it, arg, &.{ "--preview", "-p" })) |named| {
+                opts.preview = named;
+                continue;
+            }
+
+            if (try getNamedArg(it, arg, &.{ "--max-depth", "-m" })) |named| {
+                opts.max_depth = std.fmt.parseInt(usize, named, 0) catch
+                    return usageError("invalid max-depth value: {q}", .{named});
+                continue;
+            }
+
             if (mem.startsWith(u8, arg, "-")) {
                 if (mem.startsWith(u8, arg, "--")) {
                     if (std.meta.stringToEnum(Action, arg[2..])) |action| {
@@ -84,7 +175,7 @@ fn parseSearch(it: *Iter) CmdError!SearchOpts {
             }
         }
 
-        opts.path = arg;
+        opts.query = arg;
     }
 
     return opts;
@@ -95,31 +186,7 @@ fn eqlAny(needle: []const u8, haystack: []const []const u8) bool {
     return false;
 }
 
-const CmdError = error{ Help, Usage };
-
-const Cmd = union(enum) {
-    search: SearchOpts,
-    env,
-    version,
-    edit,
-};
-
-// TODO - custom action to run with sh -c <templated string>, with option to replace
-const Action = enum {
-    session,
-    window,
-    print,
-};
-
-const SearchOpts = struct {
-    path: ?[]const u8,
-    action: ?Action,
-    // TODO - preview?
-    // TODO - max_depth?
-    // TODO - stop iterating on marker match?
-    // TODO - markers?
-};
-
+// TODO - use stderr
 fn usageError(comptime fmt: []const u8, args: anytype) CmdError {
     std.log.err(fmt, args);
     return CmdError.Usage;
@@ -177,3 +244,66 @@ const Iter = struct {
         if (self.idx > 0) self.idx -= 1;
     }
 };
+
+pub fn search(ctx: Ctx, opts: SearchOpts) !void {
+    const gpa = ctx.gpa;
+    const arena = ctx.arena;
+    const io = ctx.io;
+
+    const home = ctx.environ_map.get("HOME") orelse return error.NoHome;
+
+    const roots = &.{
+        try Io.Dir.path.join(arena, &.{ home, "repos" }),
+        try Io.Dir.path.join(arena, &.{ home, "pers" }),
+    };
+
+    var projects = try walk.searchProjects(gpa, io, roots, .{
+        .max_depth = opts.max_depth orelse 0,
+        .reporter = ctx.stderr,
+    });
+    defer walk.freeProjects(gpa, &projects);
+
+    const found_projects = projects.keys();
+
+    var proc = try std.process.spawn(io, .{
+        .argv = &.{
+            "fzf",
+            "--header=choose a repo",
+            "--reverse",
+            "--scheme=path",
+            "--preview-label=[ project files ]",
+            "--preview",
+            opts.preview orelse "ls {}",
+            "--query",
+            opts.query orelse "",
+        },
+        .stdin = .pipe,
+        .stdout = .pipe,
+        //.stderr = .pipe,
+    });
+    defer proc.kill(io);
+
+    var fzf_w_buf: [64]u8 = undefined;
+    var fzf_writer = proc.stdin.?.writerStreaming(io, &fzf_w_buf);
+
+    for (found_projects) |proj| {
+        fzf_writer.interface.writeAll(proj) catch return fzf_writer.err.?;
+        fzf_writer.interface.writeByte('\n') catch return fzf_writer.err.?;
+    }
+    try fzf_writer.flush();
+    proc.stdin.?.close(io);
+    proc.stdin = null;
+
+    var fzf_r_buf: [64]u8 = undefined;
+    var fzf_reader = proc.stdout.?.readerStreaming(io, &fzf_r_buf);
+
+    const selection = fzf_reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
+        error.ReadFailed => return fzf_reader.err.?,
+        else => |e| return e,
+    };
+
+    _ = try proc.wait(io);
+
+    try ctx.stdout.print("GOT SELECTION: {s}\n", .{selection});
+    try ctx.stdout.flush();
+}
