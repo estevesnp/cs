@@ -30,6 +30,8 @@ pub fn main(init: std.process.Init) !void {
         .version => try Io.File.stdout().writeStreamingAll(ctx.io, options.cs_version),
         else => std.debug.print("{t}\n", .{cmd}),
     }
+
+    return std.process.cleanExit(ctx.io);
 }
 
 const Ctx = struct {
@@ -279,7 +281,6 @@ pub fn search(ctx: Ctx, opts: SearchOpts) !void {
         },
         .stdin = .pipe,
         .stdout = .pipe,
-        //.stderr = .pipe,
     });
     defer proc.kill(io);
 
