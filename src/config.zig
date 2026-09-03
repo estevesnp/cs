@@ -5,7 +5,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const EnvironMap = std.process.Environ.Map;
 
-const walk = @import("walk");
+const walk = @import("walk/lib.zig");
 
 const appname = "cs-refactor";
 const is_windows = builtin.os.tag == .windows;
@@ -101,4 +101,8 @@ fn parseFile(io: Io, arena: Allocator, T: type, dir: Io.Dir, filename: []const u
         else => |e| return e,
     };
     return try std.json.parseFromSliceLeaky(T, arena, data, .{ .ignore_unknown_fields = true });
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

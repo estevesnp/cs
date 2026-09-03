@@ -3,7 +3,7 @@ const mem = std.mem;
 
 const cfg = @import("config.zig");
 const options = @import("options");
-const walk = @import("walk");
+const walk = @import("walk/lib.zig");
 
 const assert = std.debug.assert;
 
@@ -302,4 +302,8 @@ pub fn search(ctx: Ctx, opts: SearchOpts) !void {
     const action = opts.action orelse config.action;
     try ctx.stdout.print("selection: {s}\naction: {t}\n", .{ selection, action });
     try ctx.stdout.flush();
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

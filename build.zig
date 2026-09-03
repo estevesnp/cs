@@ -16,14 +16,6 @@ pub fn build(b: *std.Build) !void {
     options.addOption([]const u8, "cs_version", getCsVersion(b));
     mod.addOptions("options", options);
 
-    const walk_mod = b.addModule("walk", .{
-        .root_source_file = b.path("src/walk/lib.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    mod.addImport("walk", walk_mod);
-
     const exe = b.addExecutable(.{
         .name = "cs",
         .root_module = mod,
@@ -38,6 +30,12 @@ pub fn build(b: *std.Build) !void {
 
     const run_step = b.step("run", "run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const walk_mod = b.addModule("walk", .{
+        .root_source_file = b.path("src/walk/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const build_walk = b.option(bool, "libcswalk", "build libcswalk") orelse false;
     if (build_walk) {
