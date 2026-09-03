@@ -389,9 +389,9 @@ test "searchProjects reports properly on non-existing roots" {
     try test_mountNestedTree(tmp_dir);
 
     const root_paths: []const []const u8 = &.{
-        try Io.Dir.path.joinZ(gpa, &.{ base_path, "root-2" }),
-        try Io.Dir.path.joinZ(gpa, &.{ base_path, "root-4" }),
-        try Io.Dir.path.joinZ(gpa, &.{ base_path, "non-existing-dir" }),
+        try Io.Dir.path.join(gpa, &.{ base_path, "root-2" }),
+        try Io.Dir.path.join(gpa, &.{ base_path, "root-4" }),
+        try Io.Dir.path.join(gpa, &.{ base_path, "non-existing-dir" }),
     };
     defer for (root_paths) |p| gpa.free(p);
 
