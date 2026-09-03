@@ -1,13 +1,16 @@
 const std = @import("std");
 const mem = std.mem;
 
+const cfg = @import("config.zig");
+const options = @import("options");
+const walk = @import("walk");
+
 const assert = std.debug.assert;
 
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
-const options = @import("options");
-const walk = @import("walk");
+const Action = cfg.Action;
 
 pub fn main(init: std.process.Init) !void {
     var stdout_buf: [128]u8 = undefined;
@@ -97,12 +100,6 @@ const Cmd = union(enum) {
 };
 
 // TODO - custom action to run with sh -c <templated string>, with option to replace
-const Action = enum {
-    session,
-    window,
-    print,
-};
-
 const SearchOpts = struct {
     query: ?[]const u8,
     preview: ?[]const u8,
@@ -252,15 +249,12 @@ pub fn search(ctx: Ctx, opts: SearchOpts) !void {
     const arena = ctx.arena;
     const io = ctx.io;
 
-    const home = ctx.environ_map.get("HOME") orelse return error.NoHome;
-
-    const roots = &.{
-        try Io.Dir.path.join(arena, &.{ home, "repos" }),
-        try Io.Dir.path.join(arena, &.{ home, "pers" }),
-    };
+    const config_with_roots = try cfg.readConfig(io, arena, ctx.environ_map);
+    const config = cfg.normalizeConfig(config_with_roots.config);
+    const roots = config_with_roots.roots;
 
     var projects = try walk.searchProjects(gpa, io, roots, .{
-        .max_depth = opts.max_depth orelse 0,
+        .max_depth = opts.max_depth orelse config.max_depth,
         .reporter = ctx.stderr,
     });
     defer walk.freeProjects(gpa, &projects);
@@ -275,7 +269,7 @@ pub fn search(ctx: Ctx, opts: SearchOpts) !void {
             "--scheme=path",
             "--preview-label=[ project files ]",
             "--preview",
-            opts.preview orelse "ls {}",
+            opts.preview orelse config.preview,
             "--query",
             opts.query orelse "",
         },
@@ -305,6 +299,7 @@ pub fn search(ctx: Ctx, opts: SearchOpts) !void {
 
     _ = try proc.wait(io);
 
-    try ctx.stdout.print("GOT SELECTION: {s}\n", .{selection});
+    const action = opts.action orelse config.action;
+    try ctx.stdout.print("selection: {s}\naction: {t}\n", .{ selection, action });
     try ctx.stdout.flush();
 }
