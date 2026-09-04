@@ -1,9 +1,10 @@
 const std = @import("std");
-const mem = std.mem;
-
-const cfg = @import("config.zig");
 const options = @import("options");
+const cfg = @import("config.zig");
 const walk = @import("walk/lib.zig");
+
+const mem = std.mem;
+const process = std.process;
 
 const assert = std.debug.assert;
 
@@ -12,7 +13,7 @@ const Allocator = std.mem.Allocator;
 
 const Action = cfg.Action;
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: process.Init) !void {
     var stdout_buf: [128]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(init.io, &stdout_buf);
 
@@ -34,19 +35,19 @@ pub fn main(init: std.process.Init) !void {
         else => std.debug.print("{t}\n", .{cmd}),
     }
 
-    return std.process.cleanExit(ctx.io);
+    return process.cleanExit(ctx.io);
 }
 
 const Ctx = struct {
     io: Io,
     gpa: Allocator,
     arena: Allocator,
-    environ_map: *std.process.Environ.Map,
+    environ_map: *process.Environ.Map,
 
     stdout: *Io.Writer,
     stderr: *Io.Writer,
 
-    fn init(proc_init: std.process.Init, stdout: *Io.Writer, stderr: *Io.Writer) Ctx {
+    fn init(proc_init: process.Init, stdout: *Io.Writer, stderr: *Io.Writer) Ctx {
         return .{
             .io = proc_init.io,
             .gpa = proc_init.gpa,
@@ -61,7 +62,7 @@ const Ctx = struct {
 fn writeHelpAndExit(writer: *Io.Writer, status: u8) noreturn {
     writer.writeAll(usage) catch {};
     writer.flush() catch {};
-    std.process.exit(status);
+    process.exit(status);
 }
 
 const usage =
@@ -261,47 +262,57 @@ pub fn search(ctx: Ctx, opts: SearchOpts) !void {
 
     const found_projects = projects.keys();
 
-    var proc = try std.process.spawn(io, .{
-        .argv = &.{
-            "fzf",
-            "--header=choose a repo",
-            "--reverse",
-            "--scheme=path",
-            "--preview-label=[ project files ]",
-            "--preview",
-            opts.preview orelse config.preview,
-            "--query",
-            opts.query orelse "",
-        },
-        .stdin = .pipe,
-        .stdout = .pipe,
-    });
-    defer proc.kill(io);
+    var fzf_proc = try spawnFzf(io, opts.preview orelse config.preview, opts.query orelse "");
+    defer fzf_proc.kill(io);
 
     var fzf_w_buf: [64]u8 = undefined;
-    var fzf_writer = proc.stdin.?.writerStreaming(io, &fzf_w_buf);
+    var fzf_writer = fzf_proc.stdin.?.writerStreaming(io, &fzf_w_buf);
 
     for (found_projects) |proj| {
-        fzf_writer.interface.writeAll(proj) catch return fzf_writer.err.?;
-        fzf_writer.interface.writeByte('\n') catch return fzf_writer.err.?;
+        const nt_proj = proj[0 .. proj.len + 1];
+        fzf_writer.interface.writeAll(nt_proj) catch return fzf_writer.err.?;
     }
     try fzf_writer.flush();
-    proc.stdin.?.close(io);
-    proc.stdin = null;
+    fzf_proc.stdin.?.close(io);
+    fzf_proc.stdin = null;
 
     var fzf_r_buf: [64]u8 = undefined;
-    var fzf_reader = proc.stdout.?.readerStreaming(io, &fzf_r_buf);
+    var fzf_reader = fzf_proc.stdout.?.readerStreaming(io, &fzf_r_buf);
 
     const selection = fzf_reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
         error.ReadFailed => return fzf_reader.err.?,
         else => |e| return e,
     };
 
-    _ = try proc.wait(io);
+    _ = try fzf_proc.wait(io);
 
     const action = opts.action orelse config.action;
     try ctx.stdout.print("selection: {s}\naction: {t}\n", .{ selection, action });
     try ctx.stdout.flush();
+}
+
+const FzfSpawnError = error{FzfNotInPath} || process.SpawnError;
+
+fn spawnFzf(io: Io, preview: []const u8, query: []const u8) FzfSpawnError!process.Child {
+    return process.spawn(io, .{
+        .argv = &.{
+            "fzf",
+            "--read0",
+            "--header=choose a repo",
+            "--reverse",
+            "--scheme=path",
+            "--preview-label=[ project files ]",
+            "--preview",
+            preview,
+            "--query",
+            query,
+        },
+        .stdin = .pipe,
+        .stdout = .pipe,
+    }) catch |err| switch (err) {
+        error.FileNotFound => return error.FzfNotInPath,
+        else => |e| return e,
+    };
 }
 
 test {

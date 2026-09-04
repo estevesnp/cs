@@ -10,6 +10,14 @@ const walk = @import("walk/lib.zig");
 const appname = "cs-refactor";
 const is_windows = builtin.os.tag == .windows;
 
+pub const Env = enum {
+    CS_CONFIG_PATH,
+
+    pub fn get(self: Env, env_map: *const EnvironMap) ?[]const u8 {
+        return env_map.get(@tagName(self));
+    }
+};
+
 pub const Action = enum {
     session,
     window,
@@ -36,6 +44,11 @@ pub const PartialConfig = Partial(Config);
 pub const PartialConfigWithRoots = struct {
     config: PartialConfig,
     roots: []const []const u8,
+
+    pub const empty: PartialConfigWithRoots = .{
+        .config = .{},
+        .roots = &.{},
+    };
 };
 
 fn Partial(T: type) type {
@@ -64,12 +77,11 @@ pub fn normalizeConfig(partial_config: PartialConfig) Config {
     return config;
 }
 
-pub fn configDir(io: Io, gpa: Allocator, environ_map: *const EnvironMap) !Io.Dir {
-    const path = try configDirPath(gpa, environ_map);
-    return Io.Dir.cwd().createDirPathOpen(io, path, .{});
-}
-
 pub fn configDirPath(gpa: Allocator, environ_map: *const EnvironMap) ![]const u8 {
+    if (Env.CS_CONFIG_PATH.get(environ_map)) |cfg_path| {
+        if (cfg_path.len > 0) return gpa.dupe(u8, cfg_path);
+    }
+
     if (is_windows) {
         const appdata = environ_map.get("APPDATA") orelse return error.NoAppData;
         return try Io.Dir.path.join(gpa, &.{ appdata, appname });
@@ -83,7 +95,11 @@ pub fn configDirPath(gpa: Allocator, environ_map: *const EnvironMap) ![]const u8
 }
 
 pub fn readConfig(io: Io, arena: Allocator, environ_map: *const EnvironMap) !PartialConfigWithRoots {
-    var cfg_dir = try configDir(io, arena, environ_map);
+    const cfg_path = try configDirPath(arena, environ_map);
+    var cfg_dir = Io.Dir.cwd().openDir(io, cfg_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .empty,
+        else => |e| return e,
+    };
     defer cfg_dir.close(io);
 
     const config = try parseFile(io, arena, PartialConfig, cfg_dir, "config.json");
