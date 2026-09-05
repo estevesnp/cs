@@ -1,6 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const options = @import("options");
 const cfg = @import("config.zig");
+const tmux = @import("tmux.zig");
 const walk = @import("walk/lib.zig");
 
 const mem = std.mem;
@@ -12,6 +14,8 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const Action = cfg.Action;
+
+const is_windows = builtin.os.tag == .windows;
 
 pub fn main(init: process.Init) !void {
     var stdout_buf: [128]u8 = undefined;
@@ -307,8 +311,30 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const selection = selection_opt orelse return;
 
     const action = opts.action orelse config.action;
-    try ctx.stdout.interface.print("selection: {s}\naction: {t}\n", .{ selection, action });
-    try ctx.stdout.flush();
+
+    switch (action) {
+        .print => {
+            ctx.stdout.interface.writeAll(selection) catch return ctx.stdout.err.?;
+            try ctx.stdout.flush();
+        },
+        inline .session, .window => |a| {
+            if (is_windows) try ctx.exit("tmux is not supported on windows\n");
+
+            const tmux_action = @field(tmux.Action, @tagName(a));
+            const err = tmux.handleTmux(
+                arena,
+                io,
+                ctx.environ_map,
+                &ctx.stderr.interface,
+                tmux_action,
+                selection,
+            );
+            switch (err) {
+                error.TmuxNotFound => try ctx.exit("tmux binary not found in path\n"),
+                else => return err,
+            }
+        },
+    }
 }
 
 const SearchError = WalkError || FzfExtractError || Io.ConcurrentError;
@@ -364,11 +390,11 @@ const WalkError = error{NoProjectsFound} || walk.SearchError;
 fn walkAndMatch(
     io: Io,
     arena: Allocator,
-    queue: *Io.Queue([]const u8),
+    project_queue: *Io.Queue([]const u8),
     opts: WalkOpts,
 ) WalkError!?[]const u8 {
     const project_set = try walk.searchProjects(arena, io, opts.roots, .{
-        .queue = queue,
+        .queue = project_queue,
         .reporter = opts.reporter,
         .project_markers = opts.markers,
         .max_depth = opts.max_depth,
@@ -430,11 +456,10 @@ const FzfProc = struct {
     stdout: *Io.File.Reader,
 };
 
-fn feedToFzf(io: Io, queue: *Io.Queue([]const u8), fzf_stdin: *Io.File.Writer) void {
+fn feedToFzf(io: Io, project_queue: *Io.Queue([]const u8), fzf_stdin: *Io.File.Writer) void {
     defer fzf_stdin.file.close(io);
-
     while (true) {
-        const project = queue.getOne(io) catch return;
+        const project = project_queue.getOne(io) catch return;
         // if write fails, it's likely due to fzf exiting early
         fzf_stdin.interface.writeAll(project) catch return;
         fzf_stdin.interface.writeByte('\n') catch return;
