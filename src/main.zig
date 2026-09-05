@@ -20,13 +20,13 @@ pub fn main(init: process.Init) !void {
     var stderr_buf: [128]u8 = undefined;
     var stderr = Io.File.stderr().writerStreaming(init.io, &stderr_buf);
 
-    const ctx: Ctx = .init(init, &stdout.interface, &stderr.interface);
+    const ctx: Ctx = .init(init, &stdout, &stderr);
 
     const args = try init.minimal.args.toSlice(ctx.arena);
 
     const cmd = parseArgs(args) catch |err| switch (err) {
-        error.Help => writeHelpAndExit(ctx.stdout, 0),
-        error.Usage => writeHelpAndExit(ctx.stderr, 1),
+        error.Help => writeHelpAndExit(&ctx.stdout.interface, 0),
+        error.Usage => writeHelpAndExit(&ctx.stderr.interface, 1),
     };
 
     switch (cmd) {
@@ -40,22 +40,31 @@ pub fn main(init: process.Init) !void {
 
 const Ctx = struct {
     io: Io,
-    gpa: Allocator,
     arena: Allocator,
     environ_map: *process.Environ.Map,
 
-    stdout: *Io.Writer,
-    stderr: *Io.Writer,
+    stdout: *Io.File.Writer,
+    stderr: *Io.File.Writer,
 
-    fn init(proc_init: process.Init, stdout: *Io.Writer, stderr: *Io.Writer) Ctx {
+    fn init(proc_init: process.Init, stdout: *Io.File.Writer, stderr: *Io.File.Writer) Ctx {
         return .{
             .io = proc_init.io,
-            .gpa = proc_init.gpa,
             .arena = proc_init.arena.allocator(),
             .environ_map = proc_init.environ_map,
             .stdout = stdout,
             .stderr = stderr,
         };
+    }
+
+    fn report(ctx: Ctx, data: []const u8) !void {
+        if (data.len == 0) return;
+        ctx.stderr.interface.writeAll(data) catch return ctx.stderr.err.?;
+        try ctx.stderr.flush();
+    }
+
+    fn exit(ctx: Ctx, data: []const u8) !noreturn {
+        try ctx.report(data);
+        process.exit(1);
     }
 };
 
@@ -106,6 +115,7 @@ const SearchOpts = struct {
     preview: ?[]const u8,
     max_depth: ?usize,
     action: ?Action,
+    // TODO - quiet: don't print diagnostics from walk
     // TODO - strategy: blocking (1st walk, then fzf), concurrent (race between fzf and walk)
     // TODO - stop iterating on marker match?
     // TODO - roots?
@@ -247,7 +257,6 @@ const Iter = struct {
 };
 
 fn search(ctx: Ctx, opts: SearchOpts) !void {
-    const gpa = ctx.gpa;
     const arena = ctx.arena;
     const io = ctx.io;
 
@@ -255,47 +264,186 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const config = config_with_roots.config;
     const roots = config_with_roots.roots;
 
-    var projects = try walk.searchProjects(gpa, io, roots, .{
-        .max_depth = opts.max_depth orelse config.max_depth,
-        .reporter = ctx.stderr,
-    });
-    defer walk.freeProjects(gpa, &projects);
+    const preview = opts.preview orelse config.preview;
+    const query = opts.query orelse "";
 
-    const found_projects = projects.keys();
-
-    var fzf_proc = try spawnFzf(io, opts.preview orelse config.preview, opts.query orelse "");
-    defer fzf_proc.kill(io);
-
-    var fzf_w_buf: [64]u8 = undefined;
-    var fzf_writer = fzf_proc.stdin.?.writerStreaming(io, &fzf_w_buf);
-
-    for (found_projects) |proj| {
-        fzf_writer.interface.writeAll(proj) catch return fzf_writer.err.?;
-        fzf_writer.interface.writeByte('\n') catch return fzf_writer.err.?;
-    }
-    try fzf_writer.flush();
-    fzf_proc.stdin.?.close(io);
-    fzf_proc.stdin = null;
-
-    var fzf_r_buf: [64]u8 = undefined;
-    var fzf_reader = fzf_proc.stdout.?.readerStreaming(io, &fzf_r_buf);
-
-    const selection = fzf_reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
-        error.ReadFailed => return fzf_reader.err.?,
+    var fzf_proc = spawnFzf(io, preview, query) catch |err| switch (err) {
+        error.FileNotFound => try ctx.exit("fzf binary not found in path\n"),
         else => |e| return e,
     };
 
-    _ = try fzf_proc.wait(io);
+    var fzf_w_buf: [64]u8 = undefined;
+    var fzf_writer = fzf_proc.stdin.?.writerStreaming(io, &fzf_w_buf);
+    fzf_proc.stdin = null;
+
+    var fzf_r_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
+    var fzf_reader = fzf_proc.stdout.?.readerStreaming(io, &fzf_r_buf);
+
+    // needed so that we don't print to screen while fzf is running
+    var walk_reporter: Io.Writer.Allocating = .init(arena);
+
+    const walk_opts: WalkOpts = .{
+        .reporter = &walk_reporter.writer,
+        .query = query,
+        .roots = roots,
+        .markers = config.markers,
+        .max_depth = opts.max_depth orelse config.max_depth,
+    };
+    const fzf_proc_rw: FzfProc = .{
+        .proc = &fzf_proc,
+        .stdin = &fzf_writer,
+        .stdout = &fzf_reader,
+    };
+    const selection_opt = searchProject(ctx, walk_opts, fzf_proc_rw) catch |err| {
+        try ctx.report(walk_reporter.written());
+        switch (err) {
+            error.NoProjectsFound => try ctx.exit("no projects found\n"),
+            else => |e| return e,
+        }
+    };
+
+    try ctx.report(walk_reporter.written());
+
+    const selection = selection_opt orelse return;
 
     const action = opts.action orelse config.action;
-    try ctx.stdout.print("selection: {s}\naction: {t}\n", .{ selection, action });
+    try ctx.stdout.interface.print("selection: {s}\naction: {t}\n", .{ selection, action });
     try ctx.stdout.flush();
 }
 
-const FzfSpawnError = error{FzfNotInPath} || process.SpawnError;
+const SearchError = WalkError || FzfExtractError || Io.ConcurrentError;
 
-fn spawnFzf(io: Io, preview: []const u8, query: []const u8) FzfSpawnError!process.Child {
-    return process.spawn(io, .{
+fn ReturnType(comptime function: anytype) type {
+    return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
+}
+
+fn searchProject(ctx: Ctx, walk_opts: WalkOpts, fzf_proc: FzfProc) SearchError!?[]const u8 {
+    const arena = ctx.arena;
+    const io = ctx.io;
+
+    var queue_buf: [10][]const u8 = undefined;
+    var project_queue: Io.Queue([]const u8) = .init(&queue_buf);
+
+    const U = union(enum) {
+        walk: ReturnType(walkAndMatch),
+        extract: ReturnType(extractFzfSelection),
+    };
+
+    var select_buf: [std.meta.fieldNames(U).len]U = undefined;
+    var select: Io.Select(U) = .init(io, &select_buf);
+    defer select.cancelDiscard();
+
+    var feed_future = try io.concurrent(feedToFzf, .{ io, &project_queue, fzf_proc.stdin });
+    defer feed_future.cancel(io);
+
+    try select.concurrent(.walk, walkAndMatch, .{ io, arena, &project_queue, walk_opts });
+    try select.concurrent(.extract, extractFzfSelection, .{ io, fzf_proc.proc, fzf_proc.stdout });
+
+    switch (try select.await()) {
+        .walk => |walk_match| {
+            const match = try walk_match;
+            if (match) |m| return m;
+            // fallback to fzf selection if no project matches exactly
+            const fzf_selection = try select.await();
+            return fzf_selection.extract;
+        },
+        .extract => |extracted| return try extracted,
+    }
+}
+
+const WalkOpts = struct {
+    reporter: *Io.Writer,
+    query: []const u8,
+    roots: []const []const u8,
+    markers: []const []const u8,
+    max_depth: usize,
+};
+
+const WalkError = error{NoProjectsFound} || walk.SearchError;
+
+fn walkAndMatch(
+    io: Io,
+    arena: Allocator,
+    queue: *Io.Queue([]const u8),
+    opts: WalkOpts,
+) WalkError!?[]const u8 {
+    const project_set = try walk.searchProjects(arena, io, opts.roots, .{
+        .queue = queue,
+        .reporter = opts.reporter,
+        .project_markers = opts.markers,
+        .max_depth = opts.max_depth,
+    });
+    const projects = project_set.keys();
+
+    if (projects.len == 0) {
+        return error.NoProjectsFound;
+    }
+
+    return matchProject(opts.query, projects);
+}
+
+fn matchProject(query: []const u8, project_paths: []const []const u8) ?[]const u8 {
+    if (query.len == 0) return null;
+
+    var match: ?[]const u8 = null;
+
+    for (project_paths) |path| {
+        if (std.mem.eql(u8, Io.Dir.path.basename(path), query)) {
+            if (match != null) return null;
+            match = path;
+        }
+    }
+
+    return match;
+}
+
+test matchProject {
+    try std.testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{
+        "/foo/bar/123",
+        "/foo/bar/abc",
+        "/bar/bar/bar",
+    }).?);
+
+    try std.testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{"/foo/bar/abc"}).?);
+
+    try std.testing.expectEqual(null, matchProject("abc", &.{
+        "/foo/bar/123",
+        "/foo/bar/baz",
+        "/bar/bar/bar",
+    }));
+
+    try std.testing.expectEqual(null, matchProject("abc", &.{
+        "/foo/bar/123",
+        "/foo/bar/abc",
+        "/bar/bar/bar",
+        "/foo/baz/abc",
+    }));
+
+    try std.testing.expectEqual(null, matchProject("bar", &.{"/foo-bar"}));
+
+    try std.testing.expectEqual(null, matchProject("", &.{"/foo/bar/123"}));
+}
+
+const FzfProc = struct {
+    proc: *process.Child,
+    stdin: *Io.File.Writer,
+    stdout: *Io.File.Reader,
+};
+
+fn feedToFzf(io: Io, queue: *Io.Queue([]const u8), fzf_stdin: *Io.File.Writer) void {
+    defer fzf_stdin.file.close(io);
+
+    while (true) {
+        const project = queue.getOne(io) catch return;
+        // if write fails, it's likely due to fzf exiting early
+        fzf_stdin.interface.writeAll(project) catch return;
+        fzf_stdin.interface.writeByte('\n') catch return;
+        fzf_stdin.flush() catch return;
+    }
+}
+
+fn spawnFzf(io: Io, preview: []const u8, query: []const u8) !process.Child {
+    return try process.spawn(io, .{
         .argv = &.{
             "fzf",
             "--header=choose a repo",
@@ -309,9 +457,35 @@ fn spawnFzf(io: Io, preview: []const u8, query: []const u8) FzfSpawnError!proces
         },
         .stdin = .pipe,
         .stdout = .pipe,
-    }) catch |err| switch (err) {
-        error.FileNotFound => return error.FzfNotInPath,
+    });
+}
+
+const fzf_no_match_sc: u8 = 1;
+const fzf_interrupt_sc: u8 = 130;
+
+const FzfExtractError = error{FzfBadTermination} ||
+    Io.File.Reader.Error || Io.Reader.DelimiterError || process.Child.WaitError;
+
+fn extractFzfSelection(
+    io: Io,
+    fzf_proc: *process.Child,
+    fzf_stdout: *Io.File.Reader,
+) FzfExtractError!?[]const u8 {
+    errdefer fzf_proc.kill(io);
+
+    const selection = fzf_stdout.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
+        error.EndOfStream => null,
+        error.ReadFailed => return fzf_stdout.err.?,
         else => |e| return e,
+    };
+
+    return switch (try fzf_proc.wait(io)) {
+        .exited => |code| switch (code) {
+            0 => selection,
+            fzf_no_match_sc, fzf_interrupt_sc => null,
+            else => error.FzfBadTermination,
+        },
+        else => error.FzfBadTermination,
     };
 }
 
