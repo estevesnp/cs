@@ -1,16 +1,10 @@
 const std = @import("std");
 
-const walk = @import("src/walk.zig");
 const build_zig_zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-
-    const options = b.addOptions();
-
-    const version = try std.SemanticVersion.parse(build_zig_zon.version);
-    options.addOption(std.SemanticVersion, "cs_version", version);
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -18,12 +12,14 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const options = b.addOptions();
+    options.addOption([]const u8, "cs_version", getCsVersion(b));
     mod.addOptions("options", options);
 
     const exe = b.addExecutable(.{
         .name = "cs",
         .root_module = mod,
-        .use_llvm = b.option(bool, "llvm", "Use llvm for executable"),
+        .use_llvm = b.option(bool, "llvm", "use llvm for executable"),
     });
 
     b.installArtifact(exe);
@@ -32,21 +28,31 @@ pub fn build(b: *std.Build) !void {
     run_cmd.step.dependOn(b.getInstallStep());
     run_cmd.addPassthruArgs();
 
-    const run_step = b.step("run", "Run the app");
+    const run_step = b.step("run", "run the app");
     run_step.dependOn(&run_cmd.step);
 
-    { // docs
-        const docs_install = b.addInstallDirectory(.{
-            .source_dir = exe.getEmittedDocs(),
-            .install_dir = .prefix,
-            .install_subdir = "docs",
-        });
+    const walk_mod = b.addModule("walk", .{
+        .root_source_file = b.path("src/walk/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
-        const docs_step = b.step("docs", "Generate docs");
-        docs_step.dependOn(&docs_install.step);
+    const build_walk = b.option(bool, "libcswalk", "build libcswalk") orelse false;
+    if (build_walk) {
+        const lib = b.addLibrary(.{
+            .name = "cswalk",
+            .linkage = .dynamic,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/walk/ffi/cswalk.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "walk", .module = walk_mod }},
+            }),
+        });
+        b.installArtifact(lib);
     }
 
-    const filters = b.option([]const []const u8, "test-filter", "Test filters") orelse &.{};
+    const filters = b.option([]const []const u8, "test-filter", "test filters") orelse &.{};
     const exe_tests = b.addTest(.{
         .filters = filters,
         .root_module = b.createModule(.{
@@ -60,7 +66,7 @@ pub fn build(b: *std.Build) !void {
 
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
-    const test_step = b.step("test", "Run tests");
+    const test_step = b.step("test", "run tests");
     test_step.dependOn(&run_exe_tests.step);
 
     const check_exe = b.addExecutable(.{
@@ -68,7 +74,24 @@ pub fn build(b: *std.Build) !void {
         .root_module = mod,
     });
 
-    const check_step = b.step("check", "Check that app compiles");
+    const check_step = b.step("check", "check that app compiles");
     check_step.dependOn(&check_exe.step);
     check_step.dependOn(&exe_tests.step);
+}
+
+fn getCsVersion(b: *std.Build) []const u8 {
+    const tagged_version = b.option(bool, "tagged-version", "use tagged version") orelse false;
+    if (tagged_version) return build_zig_zon.version;
+
+    const res = b.runFallible(&.{ "git", "rev-parse", "--short", "HEAD" }, .{});
+    switch (res) {
+        .success => |hash| {
+            const trimmed = std.mem.trimEnd(u8, hash, "\r\n");
+            return b.fmt("{s}-dev.{s}", .{ build_zig_zon.version, trimmed });
+        },
+        else => {
+            std.log.err("error fetching git hash ({t}). defaulting to version from build.zig.zon", .{res});
+            return build_zig_zon.version;
+        },
+    }
 }

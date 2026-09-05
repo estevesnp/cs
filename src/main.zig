@@ -1,469 +1,377 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const options = @import("options");
-const fs = std.fs;
+const cfg = @import("config.zig");
+const walk = @import("walk/lib.zig");
+
+const mem = std.mem;
 const process = std.process;
-const testing = std.testing;
-const Io = std.Io;
-const File = Io.File;
-const Writer = Io.Writer;
-const Reader = Io.Reader;
-const Allocator = std.mem.Allocator;
+
 const assert = std.debug.assert;
 
-const config = @import("config.zig");
-const cli = @import("cli.zig");
-const walk = @import("walk.zig");
-const tmux = @import("tmux.zig");
+const Io = std.Io;
+const Allocator = std.mem.Allocator;
 
-const StringSet = std.array_hash_map.String(void);
+const Action = cfg.Action;
 
-const USAGE =
-    \\usage: cs [project] [flags]
+pub fn main(init: process.Init) !void {
+    var stdout_buf: [128]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(init.io, &stdout_buf);
+
+    var stderr_buf: [128]u8 = undefined;
+    var stderr = Io.File.stderr().writerStreaming(init.io, &stderr_buf);
+
+    const ctx: Ctx = .init(init, &stdout, &stderr);
+
+    const args = try init.minimal.args.toSlice(ctx.arena);
+
+    const cmd = parseArgs(args) catch |err| switch (err) {
+        error.Help => writeHelpAndExit(&ctx.stdout.interface, 0),
+        error.Usage => writeHelpAndExit(&ctx.stderr.interface, 1),
+    };
+
+    switch (cmd) {
+        .search => |opts| try search(ctx, opts),
+        .version => try Io.File.stdout().writeStreamingAll(ctx.io, options.cs_version),
+        else => std.debug.print("{t}\n", .{cmd}),
+    }
+
+    return process.cleanExit(ctx.io);
+}
+
+const Ctx = struct {
+    io: Io,
+    arena: Allocator,
+    environ_map: *process.Environ.Map,
+
+    stdout: *Io.File.Writer,
+    stderr: *Io.File.Writer,
+
+    fn init(proc_init: process.Init, stdout: *Io.File.Writer, stderr: *Io.File.Writer) Ctx {
+        return .{
+            .io = proc_init.io,
+            .arena = proc_init.arena.allocator(),
+            .environ_map = proc_init.environ_map,
+            .stdout = stdout,
+            .stderr = stderr,
+        };
+    }
+
+    fn report(ctx: Ctx, data: []const u8) !void {
+        if (data.len == 0) return;
+        ctx.stderr.interface.writeAll(data) catch return ctx.stderr.err.?;
+        try ctx.stderr.flush();
+    }
+
+    fn exit(ctx: Ctx, data: []const u8) !noreturn {
+        try ctx.report(data);
+        process.exit(1);
+    }
+};
+
+fn writeHelpAndExit(writer: *Io.Writer, status: u8) noreturn {
+    writer.writeAll(usage) catch {};
+    writer.flush() catch {};
+    process.exit(status);
+}
+
+const usage =
+    \\usage: cs [action] [flags]
     \\
-    \\arguments:
+    \\subcommands:
     \\
-    \\  project                          project to automatically open if found
+    \\  search                     search for project
+    \\  env                        print config and environment information
+    \\  edit                       edit config
+    \\  version                    print version. also accepts --version and -v
+    \\  help                       print this message. also accepts --help and -h
     \\
+    \\search:
     \\
-    \\flags:
+    \\  usage: cs [search] [flags] [project]
     \\
-    \\  -h, --help                       print this message
-    \\  -v, -V, --version                print version
-    \\  --env                            print config and environment information
-    \\  -a, --add-paths <path> [...]     update config adding search paths
-    \\  -s, --set-paths <path> [...]     update config overriding search paths
-    \\  -r, --remove-paths <path> [...]  update config removing search paths
-    \\  --edit [editor]                  open config in editor. if no editor is
-    \\                                   provided, the following env vars are checked:
-    \\                                     - VISUAL
-    \\                                     - EDITOR
-    \\  --shell [shell]                  print out shell completions.
-    \\                                     options: zsh, bash
-    \\                                     tries to detect shell if none is provided
-    \\  --no-preview                     disables fzf preview
-    \\  --preview <str>                  preview command to pass to fzf
-    \\  --action  <action>               action to execute after finding project.
-    \\                                     options: session, window, print
-    \\                                     can call the action directly, e.g. --print
-    \\                                     can also do -w instead of --window
+    \\  arguments:
+    \\    project                  query to pre-fill picker. if it has an exact match
+    \\                             to any project, instantly selects it
     \\
-    \\
-    \\description:
-    \\
-    \\  search configured paths for projects and run an action on the selection,
-    \\  such as creating a new tmux session from it or printing out it's path
+    \\  flags:
+    \\    -a, --action <action>    select action to perform on project selection.
+    \\                             can also choose the action directly, like --print.
+    \\                             options: session, window, print
     \\
 ;
 
-fn exit(reporter: *Writer, msg: []const u8) noreturn {
-    reporter.writeAll(msg) catch {};
-    process.exit(1);
-}
+const CmdError = error{ Help, Usage };
 
-pub fn main(init: std.process.Init) !void {
-    var stderr_buf: [1024]u8 = undefined;
-    var stderr_writer = File.stderr().writer(init.io, &stderr_buf);
-    const stderr = &stderr_writer.interface;
-
-    const ctx: Context = .init(init, stderr);
-
-    const args = try init.minimal.args.toSlice(ctx.arena);
-    const command = try cli.parse(.{ .writer = stderr }, args);
-
-    switch (command) {
-        .help => try help(ctx.io),
-        .version => try version(ctx.io),
-        .env => try env(ctx),
-        .@"add-paths" => |paths| try addPaths(ctx, paths),
-        .@"set-paths" => |paths| try setPaths(ctx, paths),
-        .@"remove-paths" => |paths| try removePaths(ctx, paths),
-        .edit => |editor| try edit(ctx, editor),
-        .shell => |shell| try shellIntegration(ctx, shell),
-        .search => |opts| try search(ctx, opts),
-    }
-}
-
-const Context = struct {
-    gpa: Allocator,
-    arena: Allocator,
-    io: Io,
-    environ_map: *const process.Environ.Map,
-    reporter: Reporter,
-
-    fn init(proc_init: process.Init, reporter: *Io.Writer) Context {
-        return .{
-            .gpa = proc_init.gpa,
-            .arena = proc_init.arena.allocator(),
-            .io = proc_init.io,
-            .environ_map = proc_init.environ_map,
-            .reporter = .{ .writer = reporter },
-        };
-    }
+const Cmd = union(enum) {
+    search: SearchOpts,
+    env,
+    edit,
+    version,
 };
 
-const Reporter = struct {
-    writer: *Writer,
+// TODO - custom action to run with sh -c <templated string>, with option to replace
+const SearchOpts = struct {
+    query: ?[]const u8,
+    preview: ?[]const u8,
+    max_depth: ?usize,
+    action: ?Action,
+    // TODO - quiet: don't print diagnostics from walk
+    // TODO - strategy: blocking (1st walk, then fzf), concurrent (race between fzf and walk)
+    // TODO - stop iterating on marker match?
+    // TODO - roots?
+    // TODO - markers?
+};
+fn parseArgs(args: []const []const u8) CmdError!Cmd {
+    var it: Iter = .init(args[1..]);
 
-    fn report(self: Reporter, comptime fmt: []const u8, args: anytype) void {
-        self.writer.print(fmt ++ "\n", args) catch {};
-        self.writer.flush() catch {};
+    while (it.next()) |arg| {
+        if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
+        if (eqlAny(arg, &.{ "version", "--version", "-v" })) return .version;
+        if (mem.eql(u8, arg, "env")) return .env;
+        if (mem.eql(u8, arg, "edit")) return .edit;
+
+        if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it) };
+
+        // defaulting to search, so need to un-consume the arg
+        it.prev();
+        return .{ .search = try parseSearch(&it) };
     }
 
-    fn write(self: Reporter, msg: []const u8) void {
-        if (msg.len == 0) return;
-        self.writer.writeAll(msg) catch {};
-        self.writer.flush() catch {};
-    }
-};
-
-fn help(io: Io) File.Writer.Error!void {
-    try File.stdout().writeStreamingAll(io, USAGE);
+    // default to search when no args are passed
+    return .{ .search = try parseSearch(&it) };
 }
 
-fn version(io: Io) Writer.Error!void {
-    var buf: [16]u8 = undefined;
-    var stdout_writer = File.stdout().writer(io, &buf);
-    const stdout = &stdout_writer.interface;
-
-    try stdout.print("{f}\n", .{options.cs_version});
-    try stdout.flush();
-}
-
-const EnvError = config.OpenConfigError || Writer.Error;
-
-const Env = struct {
-    config: config.Config,
-    env: std.enums.EnumFieldStruct(config.Env, []const u8, null),
-};
-
-fn env(ctx: Context) EnvError!void {
-    const arena = ctx.arena;
-    const io = ctx.io;
-
-    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
-    defer cfg_context.deinit(arena, io);
-
-    var stdout_buf: [256]u8 = undefined;
-    var stdout_writer = File.stdout().writer(io, &stdout_buf);
-    const stdout = &stdout_writer.interface;
-
-    const env_obj: Env = .{
-        .config = cfg_context.config,
-        .env = .{
-            .CS_CONFIG_PATH = cfg_context.config_path,
-        },
+fn parseSearch(it: *Iter) CmdError!SearchOpts {
+    var opts: SearchOpts = .{
+        .query = null,
+        .preview = null,
+        .max_depth = null,
+        .action = null,
     };
 
-    try std.json.Stringify.value(env_obj, .{ .whitespace = .indent_2 }, stdout);
-
-    try stdout.flush();
-}
-
-fn addPaths(ctx: Context, paths: []const []const u8) !void {
-    assert(paths.len > 0);
-
-    const arena = ctx.arena;
-    const io = ctx.io;
-
-    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
-    defer cfg_context.deinit(arena, io);
-
-    var cfg = cfg_context.config;
-
-    var path_set: StringSet = try .init(arena, cfg.project_roots, &.{});
-    defer path_set.deinit(arena);
-
-    const cwd: Io.Dir = .cwd();
-    for (paths) |path| {
-        if (path.len == 0) continue;
-        const real_path = cwd.realPathFileAlloc(io, path, arena) catch |err| switch (err) {
-            error.FileNotFound => {
-                ctx.reporter.report("{s} not found", .{path});
+    var parsing_args = true;
+    while (it.next()) |arg| {
+        if (parsing_args) {
+            if (mem.eql(u8, arg, "--")) {
+                parsing_args = false;
                 continue;
-            },
-            else => |e| return e,
-        };
-        const gop = try path_set.getOrPut(arena, real_path);
-        if (gop.found_existing) {
-            ctx.reporter.report("root {s} already exists", .{real_path});
-        }
-    }
-
-    cfg.project_roots = path_set.keys();
-
-    try config.updateConfig(io, cfg_context.config_file, cfg);
-}
-
-fn setPaths(ctx: Context, paths: []const []const u8) !void {
-    assert(paths.len > 0);
-
-    const arena = ctx.arena;
-    const io = ctx.io;
-
-    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
-    defer cfg_context.deinit(arena, io);
-
-    var cfg = cfg_context.config;
-
-    var path_set: StringSet = .empty;
-    defer path_set.deinit(arena);
-
-    const cwd: Io.Dir = .cwd();
-    for (paths) |path| {
-        if (path.len == 0) continue;
-        const real_path = cwd.realPathFileAlloc(io, path, arena) catch |err| switch (err) {
-            error.FileNotFound => {
-                ctx.reporter.report("{s} not found", .{path});
-                continue;
-            },
-            else => |e| return e,
-        };
-
-        const gop = try path_set.getOrPut(arena, real_path);
-        if (gop.found_existing) {
-            ctx.reporter.report("root {s} was already added", .{real_path});
-        }
-    }
-
-    if (path_set.count() == 0) {
-        ctx.reporter.report("no roots were added, aborting", .{});
-        return;
-    }
-
-    cfg.project_roots = path_set.keys();
-
-    try config.updateConfig(io, cfg_context.config_file, cfg);
-}
-
-fn removePaths(ctx: Context, paths: []const []const u8) !void {
-    assert(paths.len > 0);
-
-    const arena = ctx.arena;
-    const io = ctx.io;
-
-    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
-    defer cfg_context.deinit(arena, io);
-
-    var cfg = cfg_context.config;
-
-    var path_set: StringSet = try .init(arena, cfg.project_roots, &.{});
-    defer path_set.deinit(arena);
-
-    const cwd = try process.currentPathAlloc(io, arena);
-    for (paths) |path| {
-        if (path.len == 0) continue;
-
-        const resolved = try Io.Dir.path.resolve(arena, &.{ cwd, path });
-        const removed = path_set.orderedRemove(resolved);
-
-        if (!removed) {
-            ctx.reporter.report("root {s} not configured", .{resolved});
-        }
-    }
-
-    cfg.project_roots = path_set.keys();
-
-    try config.updateConfig(io, cfg_context.config_file, cfg);
-}
-
-const visual_env = "VISUAL";
-const editor_env = "EDITOR";
-
-const EditError = error{ NoEditor, BadTermination } || config.OpenConfigError || process.SpawnError;
-
-fn edit(ctx: Context, editor_opt: ?[]const u8) EditError!void {
-    const arena = ctx.arena;
-    const io = ctx.io;
-    const env_map = ctx.environ_map;
-
-    var cfg_ctx = try config.openConfig(arena, io, env_map);
-    cfg_ctx.config_file.close(io);
-
-    const cfg_file_path = try Io.Dir.path.join(arena, &.{ cfg_ctx.config_path, config.CONFIG_FILE_NAME });
-
-    const editor = editor_opt orelse
-        env_map.get(visual_env) orelse
-        env_map.get(editor_env) orelse {
-        ctx.reporter.report("no editor found, either set the '{s}' or '{s}' environment variable", .{ visual_env, editor_env });
-        return error.NoEditor;
-    };
-
-    ctx.reporter.report("opening config with: {s} {s}", .{ editor, cfg_file_path });
-
-    var proc = try process.spawn(io, .{
-        .argv = &.{ editor, cfg_file_path },
-    });
-    const res = try proc.wait(io);
-
-    switch (res) {
-        .exited => |sc| {
-            if (sc != 0) {
-                ctx.reporter.report("{s} exited with non-zero status code: {d}", .{ editor, sc });
-                return error.BadTermination;
             }
-        },
-        .signal => |sig| {
-            ctx.reporter.report("{s} exited with signal {t}", .{ editor, sig });
-            return error.BadTermination;
-        },
-        else => {
-            ctx.reporter.report("{s} exited with bad termination", .{editor});
-            return error.BadTermination;
-        },
+            if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
+
+            if (try getNamedArg(it, arg, &.{ "--action", "-a" })) |named| {
+                opts.action = std.meta.stringToEnum(Action, named) orelse
+                    return usageError("invalid action value: {q}", .{named});
+                continue;
+            }
+
+            if (try getNamedArg(it, arg, &.{ "--preview", "-p" })) |named| {
+                opts.preview = named;
+                continue;
+            }
+
+            if (try getNamedArg(it, arg, &.{ "--max-depth", "-m" })) |named| {
+                opts.max_depth = std.fmt.parseInt(usize, named, 0) catch
+                    return usageError("invalid max-depth value: {q}", .{named});
+                continue;
+            }
+
+            if (mem.startsWith(u8, arg, "-")) {
+                if (mem.startsWith(u8, arg, "--")) {
+                    if (std.meta.stringToEnum(Action, arg[2..])) |action| {
+                        opts.action = action;
+                        continue;
+                    }
+                }
+                return usageError("invalid flag: {q}", .{arg});
+            }
+        }
+
+        opts.query = arg;
     }
+
+    return opts;
 }
 
-const ShellIntegrationError = error{ UnsupportedShell, ShellNotFound } || File.Writer.Error;
-
-fn shellIntegration(ctx: Context, shell: ?cli.Shell) ShellIntegrationError!void {
-    const io = ctx.io;
-
-    const shell_tag = shell orelse blk: {
-        const shell_path = ctx.environ_map.get("SHELL") orelse return error.ShellNotFound;
-        const shell_name = Io.Dir.path.basename(shell_path);
-
-        break :blk std.meta.stringToEnum(cli.Shell, shell_name) orelse return error.UnsupportedShell;
-    };
-
-    const csd_integration = switch (shell_tag) {
-        .zsh, .bash => @embedFile("shell-integration/shell.bash.zsh"),
-        .fish => @embedFile("shell-integration/shell.fish"),
-    };
-
-    try File.stdout().writeStreamingAll(io, csd_integration);
+fn eqlAny(needle: []const u8, haystack: []const []const u8) bool {
+    for (haystack) |elem| if (mem.eql(u8, needle, elem)) return true;
+    return false;
 }
 
-const SearchError = SearchProjectError || config.OpenConfigError || tmux.Error || File.Writer.Error;
+// TODO - use stderr
+fn usageError(comptime fmt: []const u8, args: anytype) CmdError {
+    std.log.err(fmt, args);
+    return CmdError.Usage;
+}
 
-fn search(ctx: Context, search_opts: cli.SearchOpts) SearchError!void {
+/// if `arg` matches any of the `flags`, gets a named arg, either from the
+/// argument itself (`--foo=bar`) or from the iterator (`--foo bar`)
+///
+/// if no flag matches, `null` is returned
+///
+/// if any flag matches and no argument is provided, prints explanation and
+/// returns `error.UsageError`
+fn getNamedArg(it: *Iter, arg: []const u8, flags: []const []const u8) CmdError!?[]const u8 {
+    assert(flags.len > 0);
+
+    for (flags) |flag| {
+        if (!mem.startsWith(u8, arg, flag)) continue;
+
+        // exact flag, requires arg
+        if (arg.len == flag.len) return it.next() orelse
+            usageError("flag {q} requires an argument", .{flag});
+
+        // no match
+        if (arg[flag.len] != '=') continue;
+
+        const named_arg = arg[flag.len + 1 ..];
+
+        // no arg after =
+        if (named_arg.len == 0)
+            return usageError("flag {q} requires an argument", .{flag});
+
+        return named_arg;
+    }
+
+    // no flag match
+    return null;
+}
+
+const Iter = struct {
+    slice: []const []const u8,
+    idx: usize,
+
+    fn init(slice: []const []const u8) Iter {
+        return .{ .idx = 0, .slice = slice };
+    }
+
+    fn next(self: *Iter) ?[]const u8 {
+        if (self.idx >= self.slice.len) return null;
+        const elem = self.slice[self.idx];
+        self.idx += 1;
+        return elem;
+    }
+
+    fn prev(self: *Iter) void {
+        if (self.idx > 0) self.idx -= 1;
+    }
+};
+
+fn search(ctx: Ctx, opts: SearchOpts) !void {
     const arena = ctx.arena;
     const io = ctx.io;
 
-    var cfg_context = try config.openConfig(arena, io, ctx.environ_map);
-    cfg_context.deinit(arena, io);
+    const config_with_roots = try cfg.readConfig(io, arena, ctx.environ_map);
+    const config = config_with_roots.config;
+    const roots = config_with_roots.roots;
 
-    const cfg = cfg_context.config;
+    const preview = opts.preview orelse config.preview;
+    const query = opts.query orelse "";
 
-    if (cfg.project_roots.len == 0) {
-        exit(ctx.reporter.writer, "no project roots found. add one using the '--add-paths' flag\n");
-    }
+    var fzf_proc = spawnFzf(io, preview, query) catch |err| switch (err) {
+        error.FileNotFound => try ctx.exit("fzf binary not found in path\n"),
+        else => |e| return e,
+    };
 
-    const preview = search_opts.preview orelse cfg.preview;
+    var fzf_w_buf: [64]u8 = undefined;
+    var fzf_writer = fzf_proc.stdin.?.writerStreaming(io, &fzf_w_buf);
+    fzf_proc.stdin = null;
 
-    // walk needs it's own reporter so that it doesn't mess with fzf
+    var fzf_r_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
+    var fzf_reader = fzf_proc.stdout.?.readerStreaming(io, &fzf_r_buf);
+
+    // needed so that we don't print to screen while fzf is running
     var walk_reporter: Io.Writer.Allocating = .init(arena);
-    defer walk_reporter.deinit();
 
     const walk_opts: WalkOpts = .{
-        .roots = cfg.project_roots,
-        .project_markers = cfg.project_markers,
         .reporter = &walk_reporter.writer,
+        .query = query,
+        .roots = roots,
+        .markers = config.markers,
+        .max_depth = opts.max_depth orelse config.max_depth,
     };
-
-    const path_opt = searchProject(ctx, walk_opts, search_opts.project, preview) catch |err| {
-        ctx.reporter.write(walk_reporter.written());
+    const fzf_proc_rw: FzfProc = .{
+        .proc = &fzf_proc,
+        .stdin = &fzf_writer,
+        .stdout = &fzf_reader,
+    };
+    const selection_opt = searchProject(ctx, walk_opts, fzf_proc_rw) catch |err| {
+        try ctx.report(walk_reporter.written());
         switch (err) {
-            error.FzfNotFound => exit(ctx.reporter.writer, "fzf binary not found in path\n"),
-            error.NoProjectsFound => exit(ctx.reporter.writer, "no projects found\n"),
-            else => return err,
+            error.NoProjectsFound => try ctx.exit("no projects found\n"),
+            else => |e| return e,
         }
     };
 
-    ctx.reporter.write(walk_reporter.written());
-    const path = path_opt orelse return;
+    try ctx.report(walk_reporter.written());
 
-    const action = search_opts.action orelse cfg.action;
-    switch (action) {
-        .print => try File.stdout().writeStreamingAll(io, path),
+    const selection = selection_opt orelse return;
 
-        inline else => |tmux_action| {
-            if (builtin.os.tag == .windows) exit(ctx.reporter.writer, "tmux is not supported on windows\n");
-
-            const err = tmux.handleTmux(
-                arena,
-                io,
-                ctx.environ_map,
-                @field(tmux.Action, @tagName(tmux_action)),
-                path,
-            );
-            switch (err) {
-                error.TmuxNotFound => exit(ctx.reporter.writer, "tmux binary not found in path\n"),
-                else => return err,
-            }
-        },
-    }
+    const action = opts.action orelse config.action;
+    try ctx.stdout.interface.print("selection: {s}\naction: {t}\n", .{ selection, action });
+    try ctx.stdout.flush();
 }
 
-const WalkOpts = struct {
-    roots: []const []const u8,
-    project_markers: []const []const u8,
-    reporter: *Writer,
-};
+const SearchError = WalkError || FzfExtractError || Io.ConcurrentError;
 
 fn ReturnType(comptime function: anytype) type {
     return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
 }
 
-const SearchProjectError = ExtractError || WalkError || SpawnFzfError || Io.ConcurrentError ||
-    error{NoProjectsFound};
-
-fn searchProject(
-    ctx: Context,
-    walk_opts: WalkOpts,
-    project_query: []const u8,
-    preview: []const u8,
-) SearchProjectError!?[]const u8 {
+fn searchProject(ctx: Ctx, walk_opts: WalkOpts, fzf_proc: FzfProc) SearchError!?[]const u8 {
     const arena = ctx.arena;
     const io = ctx.io;
 
-    var project_queue_buf: [10][]const u8 = undefined;
-    var project_queue: Io.Queue([]const u8) = .init(&project_queue_buf);
-    defer project_queue.close(io);
-
-    var fzf_proc = try spawnFzf(io, project_query, preview);
-    defer fzf_proc.kill(io);
-
-    const fzf_stdin_file = fzf_proc.stdin.?;
-    fzf_proc.stdin = null;
-
-    var write_future = try io.concurrent(writeToFzf, .{ io, fzf_stdin_file, &project_queue });
-    defer write_future.cancel(io);
+    var queue_buf: [10][]const u8 = undefined;
+    var project_queue: Io.Queue([]const u8) = .init(&queue_buf);
 
     const U = union(enum) {
         walk: ReturnType(walkAndMatch),
-        extract: ReturnType(extractFzf),
+        extract: ReturnType(extractFzfSelection),
     };
 
     var select_buf: [std.meta.fieldNames(U).len]U = undefined;
     var select: Io.Select(U) = .init(io, &select_buf);
     defer select.cancelDiscard();
 
-    try select.concurrent(.walk, walkAndMatch, .{ arena, io, &project_queue, walk_opts, project_query });
-    try select.concurrent(.extract, extractFzf, .{ arena, io, &fzf_proc });
+    var feed_future = try io.concurrent(feedToFzf, .{ io, &project_queue, fzf_proc.stdin });
+    defer feed_future.cancel(io);
 
-    return switch (try select.await()) {
-        .walk => |w| return try w orelse switch (try select.await()) {
-            .extract => |extracted| try extracted,
-            .walk => unreachable,
+    try select.concurrent(.walk, walkAndMatch, .{ io, arena, &project_queue, walk_opts });
+    try select.concurrent(.extract, extractFzfSelection, .{ io, fzf_proc.proc, fzf_proc.stdout });
+
+    switch (try select.await()) {
+        .walk => |walk_match| {
+            const match = try walk_match;
+            if (match) |m| return m;
+            // fallback to fzf selection if no project matches exactly
+            const fzf_selection = try select.await();
+            return fzf_selection.extract;
         },
-        .extract => |extracted| try extracted,
-    };
+        .extract => |extracted| return try extracted,
+    }
 }
 
-const WalkError = walk.SearchError || error{NoProjectsFound};
+const WalkOpts = struct {
+    reporter: *Io.Writer,
+    query: []const u8,
+    roots: []const []const u8,
+    markers: []const []const u8,
+    max_depth: usize,
+};
+
+const WalkError = error{NoProjectsFound} || walk.SearchError;
 
 fn walkAndMatch(
-    arena: Allocator,
     io: Io,
-    project_queue: *Io.Queue([]const u8),
-    walk_opts: WalkOpts,
-    project_query: []const u8,
+    arena: Allocator,
+    queue: *Io.Queue([]const u8),
+    opts: WalkOpts,
 ) WalkError!?[]const u8 {
-    const project_set = try walk.searchProjects(arena, io, walk_opts.roots, .{
-        .queue = project_queue,
-        .reporter = walk_opts.reporter,
-        .project_markers = walk_opts.project_markers,
+    const project_set = try walk.searchProjects(arena, io, opts.roots, .{
+        .queue = queue,
+        .reporter = opts.reporter,
+        .project_markers = opts.markers,
+        .max_depth = opts.max_depth,
     });
     const projects = project_set.keys();
 
@@ -471,83 +379,16 @@ fn walkAndMatch(
         return error.NoProjectsFound;
     }
 
-    return matchProject(project_query, projects);
+    return matchProject(opts.query, projects);
 }
 
-const ExtractError = Allocator.Error || Reader.DelimiterError || process.Child.WaitError || Io.Cancelable || Io.QueueClosedError ||
-    error{ FzfNotFound, FzfNonZeroExitCode, FzfBadTermination };
-
-const fzf_no_match_sc: u8 = 1;
-const fzf_interrupt_sc: u8 = 130;
-
-fn extractFzf(arena: Allocator, io: Io, fzf_proc: *process.Child) ExtractError!?[]const u8 {
-    // +1 for the new line
-    var buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
-
-    var fzf_br = fzf_proc.stdout.?.reader(io, &buf);
-    const fzf_reader = &fzf_br.interface;
-
-    const path = fzf_reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
-        error.EndOfStream => null,
-        else => return err,
-    };
-
-    return switch (try fzf_proc.wait(io)) {
-        .exited => |code| switch (code) {
-            0 => try arena.dupe(u8, path orelse return null),
-            fzf_no_match_sc, fzf_interrupt_sc => null,
-            else => error.FzfNonZeroExitCode,
-        },
-        else => error.FzfBadTermination,
-    };
-}
-
-fn writeToFzf(io: Io, fzf_stdin_file: Io.File, project_queue: *Io.Queue([]const u8)) void {
-    defer fzf_stdin_file.close(io);
-
-    var stdin_buf: [256]u8 = undefined;
-    var fzf_bw = fzf_stdin_file.writer(io, &stdin_buf);
-    const fzf_stdin = &fzf_bw.interface;
-
-    while (true) {
-        const project = project_queue.getOne(io) catch return;
-        // if write fails, it's likely due to fzf exiting early
-        fzf_stdin.writeAll(project) catch return;
-        fzf_stdin.writeByte('\n') catch return;
-        fzf_stdin.flush() catch return;
-    }
-}
-
-const SpawnFzfError = process.SpawnError || error{FzfNotFound};
-
-fn spawnFzf(io: Io, project: []const u8, preview: []const u8) SpawnFzfError!process.Child {
-    return process.spawn(io, .{
-        .argv = &.{
-            "fzf",
-            "--header=choose a repo",
-            "--reverse",
-            "--scheme=path",
-            "--preview-label=[ project files ]",
-            "--preview",
-            preview,
-            "--query",
-            project,
-        },
-        .stdin = .pipe,
-        .stdout = .pipe,
-    }) catch |err| switch (err) {
-        error.FileNotFound => return error.FzfNotFound,
-        else => return err,
-    };
-}
-
-fn matchProject(project: []const u8, project_paths: []const []const u8) ?[]const u8 {
-    if (project.len == 0) return null;
+fn matchProject(query: []const u8, project_paths: []const []const u8) ?[]const u8 {
+    if (query.len == 0) return null;
 
     var match: ?[]const u8 = null;
 
     for (project_paths) |path| {
-        if (std.mem.eql(u8, Io.Dir.path.basename(path), project)) {
+        if (std.mem.eql(u8, Io.Dir.path.basename(path), query)) {
             if (match != null) return null;
             match = path;
         }
@@ -557,32 +398,97 @@ fn matchProject(project: []const u8, project_paths: []const []const u8) ?[]const
 }
 
 test matchProject {
-    try testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{
+    try std.testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{
         "/foo/bar/123",
         "/foo/bar/abc",
         "/bar/bar/bar",
     }).?);
 
-    try testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{"/foo/bar/abc"}).?);
+    try std.testing.expectEqualStrings("/foo/bar/abc", matchProject("abc", &.{"/foo/bar/abc"}).?);
 
-    try testing.expectEqual(null, matchProject("abc", &.{
+    try std.testing.expectEqual(null, matchProject("abc", &.{
         "/foo/bar/123",
         "/foo/bar/baz",
         "/bar/bar/bar",
     }));
 
-    try testing.expectEqual(null, matchProject("abc", &.{
+    try std.testing.expectEqual(null, matchProject("abc", &.{
         "/foo/bar/123",
         "/foo/bar/abc",
         "/bar/bar/bar",
         "/foo/baz/abc",
     }));
 
-    try testing.expectEqual(null, matchProject("bar", &.{"/foo-bar"}));
+    try std.testing.expectEqual(null, matchProject("bar", &.{"/foo-bar"}));
 
-    try testing.expectEqual(null, matchProject("", &.{"/foo/bar/123"}));
+    try std.testing.expectEqual(null, matchProject("", &.{"/foo/bar/123"}));
 }
 
-test "ref all decls" {
-    testing.refAllDecls(@This());
+const FzfProc = struct {
+    proc: *process.Child,
+    stdin: *Io.File.Writer,
+    stdout: *Io.File.Reader,
+};
+
+fn feedToFzf(io: Io, queue: *Io.Queue([]const u8), fzf_stdin: *Io.File.Writer) void {
+    defer fzf_stdin.file.close(io);
+
+    while (true) {
+        const project = queue.getOne(io) catch return;
+        // if write fails, it's likely due to fzf exiting early
+        fzf_stdin.interface.writeAll(project) catch return;
+        fzf_stdin.interface.writeByte('\n') catch return;
+        fzf_stdin.flush() catch return;
+    }
+}
+
+fn spawnFzf(io: Io, preview: []const u8, query: []const u8) !process.Child {
+    return try process.spawn(io, .{
+        .argv = &.{
+            "fzf",
+            "--header=choose a repo",
+            "--reverse",
+            "--scheme=path",
+            "--preview-label=[ project files ]",
+            "--preview",
+            preview,
+            "--query",
+            query,
+        },
+        .stdin = .pipe,
+        .stdout = .pipe,
+    });
+}
+
+const fzf_no_match_sc: u8 = 1;
+const fzf_interrupt_sc: u8 = 130;
+
+const FzfExtractError = error{FzfBadTermination} ||
+    Io.File.Reader.Error || Io.Reader.DelimiterError || process.Child.WaitError;
+
+fn extractFzfSelection(
+    io: Io,
+    fzf_proc: *process.Child,
+    fzf_stdout: *Io.File.Reader,
+) FzfExtractError!?[]const u8 {
+    errdefer fzf_proc.kill(io);
+
+    const selection = fzf_stdout.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
+        error.EndOfStream => null,
+        error.ReadFailed => return fzf_stdout.err.?,
+        else => |e| return e,
+    };
+
+    return switch (try fzf_proc.wait(io)) {
+        .exited => |code| switch (code) {
+            0 => selection,
+            fzf_no_match_sc, fzf_interrupt_sc => null,
+            else => error.FzfBadTermination,
+        },
+        else => error.FzfBadTermination,
+    };
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

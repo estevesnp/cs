@@ -9,8 +9,6 @@ cli tool for searching and opening projects in tmux
 
 ## installation
 
-needs [zig](https://codeberg.org/ziglang/zig) version `0.16.0-dev.2694+74f361a5c` (nightly) or higher
-
 1. clone repository
 
 ```sh
