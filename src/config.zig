@@ -25,31 +25,23 @@ pub const Action = enum {
 };
 
 pub const Config = struct {
-    // maybe seperate from rest of struct?
-    markers: []const []const u8,
-    max_depth: usize,
-    action: Action,
-    preview: []const u8,
-
-    pub const default: Config = .{
-        .markers = walk.default_project_markers,
-        .max_depth = walk.default_max_depth,
-        .action = .session,
-        .preview = if (is_windows) "dir {}" else "ls {}",
-    };
+    markers: []const []const u8 = walk.default_project_markers,
+    max_depth: usize = walk.default_max_depth,
+    action: Action = .session,
+    preview: []const u8 = if (is_windows) "dir {}" else "ls {}",
 };
 
-pub const PartialConfig = Partial(Config);
-
-pub const PartialConfigWithRoots = struct {
-    config: PartialConfig,
+pub const ConfigWithRoots = struct {
+    config: Config,
     roots: []const []const u8,
 
-    pub const empty: PartialConfigWithRoots = .{
+    pub const default: ConfigWithRoots = .{
         .config = .{},
         .roots = &.{},
     };
 };
+
+pub const PartialConfig = Partial(Config);
 
 fn Partial(T: type) type {
     const info = switch (@typeInfo(T)) {
@@ -70,7 +62,7 @@ fn Partial(T: type) type {
     return @Struct(.auto, null, info.field_names, &field_types, &field_attrs);
 }
 
-pub fn normalizeConfig(partial_config: PartialConfig) Config {
+fn normalizeConfig(partial_config: PartialConfig) Config {
     var config: Config = undefined;
     inline for (@typeInfo(PartialConfig).@"struct".field_names) |field|
         @field(config, field) = @field(partial_config, field) orelse @field(Config.default, field);
@@ -94,15 +86,15 @@ pub fn configDirPath(gpa: Allocator, environ_map: *const EnvironMap) ![]const u8
     return try Io.Dir.path.join(gpa, &.{ home, ".config", appname });
 }
 
-pub fn readConfig(io: Io, arena: Allocator, environ_map: *const EnvironMap) !PartialConfigWithRoots {
+pub fn readConfig(io: Io, arena: Allocator, environ_map: *const EnvironMap) !ConfigWithRoots {
     const cfg_path = try configDirPath(arena, environ_map);
     var cfg_dir = Io.Dir.cwd().openDir(io, cfg_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return .empty,
+        error.FileNotFound => return .default,
         else => |e| return e,
     };
     defer cfg_dir.close(io);
 
-    const config = try parseFile(io, arena, PartialConfig, cfg_dir, "config.json");
+    const config = try parseFile(io, arena, Config, cfg_dir, "config.json");
     const roots = try parseFile(io, arena, []const []const u8, cfg_dir, "roots.json");
 
     return .{

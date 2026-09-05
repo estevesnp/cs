@@ -106,6 +106,7 @@ const SearchOpts = struct {
     preview: ?[]const u8,
     max_depth: ?usize,
     action: ?Action,
+    // TODO - strategy: blocking (1st walk, then fzf), concurrent (race between fzf and walk)
     // TODO - stop iterating on marker match?
     // TODO - roots?
     // TODO - markers?
@@ -245,13 +246,13 @@ const Iter = struct {
     }
 };
 
-pub fn search(ctx: Ctx, opts: SearchOpts) !void {
+fn search(ctx: Ctx, opts: SearchOpts) !void {
     const gpa = ctx.gpa;
     const arena = ctx.arena;
     const io = ctx.io;
 
     const config_with_roots = try cfg.readConfig(io, arena, ctx.environ_map);
-    const config = cfg.normalizeConfig(config_with_roots.config);
+    const config = config_with_roots.config;
     const roots = config_with_roots.roots;
 
     var projects = try walk.searchProjects(gpa, io, roots, .{
@@ -269,8 +270,8 @@ pub fn search(ctx: Ctx, opts: SearchOpts) !void {
     var fzf_writer = fzf_proc.stdin.?.writerStreaming(io, &fzf_w_buf);
 
     for (found_projects) |proj| {
-        const nt_proj = proj[0 .. proj.len + 1];
-        fzf_writer.interface.writeAll(nt_proj) catch return fzf_writer.err.?;
+        fzf_writer.interface.writeAll(proj) catch return fzf_writer.err.?;
+        fzf_writer.interface.writeByte('\n') catch return fzf_writer.err.?;
     }
     try fzf_writer.flush();
     fzf_proc.stdin.?.close(io);
@@ -297,7 +298,6 @@ fn spawnFzf(io: Io, preview: []const u8, query: []const u8) FzfSpawnError!proces
     return process.spawn(io, .{
         .argv = &.{
             "fzf",
-            "--read0",
             "--header=choose a repo",
             "--reverse",
             "--scheme=path",
