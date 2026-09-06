@@ -7,7 +7,7 @@ const EnvironMap = std.process.Environ.Map;
 
 const walk = @import("walk/lib.zig");
 
-const appname = "cs-refactor";
+const appname = "cs";
 const is_windows = builtin.os.tag == .windows;
 
 pub const config_filename = "config.json";
