@@ -7,11 +7,16 @@ const ArrayList = std.ArrayList;
 const Writer = Io.Writer;
 const assert = std.debug.assert;
 
-const StringSet = std.array_hash_map.String(void);
+/// hash set of null terminated slices (`[:0]const u8`)
+/// based off of std.array_hash_map.String(void);
+pub const StringSet = std.array_hash_map.Custom([:0]const u8, void, std.array_hash_map.StringContext, true);
 
 pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
+pub const default_max_depth = 5;
 
-pub const SearchError = Io.File.OpenError || Allocator.Error || Writer.Error || Io.Cancelable || Io.QueueClosedError;
+pub const SearchError =
+    error{NoRootPaths} ||
+    Io.File.OpenError || Allocator.Error || Writer.Error || Io.Cancelable || Io.QueueClosedError;
 
 pub const SearchOpts = struct {
     /// optional queue to send paths to
@@ -19,7 +24,7 @@ pub const SearchOpts = struct {
     /// optional writer to report to
     reporter: ?*Writer = null,
     /// max depth for searching for projects
-    max_depth: usize = 5,
+    max_depth: usize = default_max_depth,
     /// marker to identify if a project exists
     project_markers: []const []const u8 = default_project_markers,
 };
@@ -43,7 +48,7 @@ const Context = struct {
         return .{
             .gpa = gpa,
             .io = io,
-            .max_depth = opts.max_depth,
+            .max_depth = if (opts.max_depth == 0) default_max_depth else opts.max_depth,
             .queue = opts.queue,
             .reporter = opts.reporter,
             .project_markers = if (opts.project_markers.len == 0) default_project_markers else opts.project_markers,
@@ -96,10 +101,7 @@ const Context = struct {
         }
         self.to_check_stack.deinit(gpa);
 
-        for (self.projects.keys()) |key| {
-            gpa.free(key);
-        }
-        self.projects.deinit(gpa);
+        freeProjects(gpa, &self.projects);
     }
 };
 
@@ -126,7 +128,7 @@ pub fn freeProjects(gpa: Allocator, projects: *StringSet) void {
 }
 
 fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOpts) SearchError!Context {
-    assert(root_paths.len > 0);
+    if (root_paths.len == 0) return SearchError.NoRootPaths;
 
     var ctx: Context = .init(gpa, io, opts);
     errdefer ctx.deinit();
@@ -164,7 +166,7 @@ fn searchDir(ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
     var iter = dir.iterate();
     while (iter.next(io) catch null) |inner| {
         if (anyEql(ctx.project_markers, inner.name)) {
-            const path_name = try Io.Dir.path.join(gpa, ctx.path_stack.items);
+            const path_name = try Io.Dir.path.joinZ(gpa, ctx.path_stack.items);
             errdefer gpa.free(path_name);
 
             const gop = try ctx.projects.getOrPut(gpa, path_name);
@@ -425,7 +427,7 @@ fn test_assertProjects(
 
     const roots = try arena.alloc([]const u8, root_paths.len);
     for (root_paths, roots) |path, *root| {
-        root.* = try Io.Dir.path.join(arena, path);
+        root.* = try Io.Dir.path.joinZ(arena, path);
     }
 
     const expected_projects = try arena.alloc([]const u8, expected_projects_paths.len);

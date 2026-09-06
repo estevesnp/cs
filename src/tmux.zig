@@ -7,7 +7,8 @@ const Io = std.Io;
 const assert = std.debug.assert;
 
 pub const Action = enum { session, window };
-pub const Error = SessionError || error{TmuxNotFound};
+
+const Error = error{TmuxNotFound} || SessionError;
 
 /// handles the provided `action`, replacing this process by performing an
 /// `execv` onto new process, attaching to a tmux session or window
@@ -15,20 +16,27 @@ pub fn handleTmux(
     gpa: Allocator,
     io: Io,
     environ_map: *const process.Environ.Map,
+    reporter: ?*Io.Writer,
     action: Action,
     project_path: []const u8,
 ) Error {
     var basename_buf: [256]u8 = undefined;
     const session_name = normalizeBasename(std.Io.Dir.path.basename(project_path), &basename_buf);
 
-    if (environ_map.get("TMUX") == null) {
-        return createAndAttachSession(io, project_path, session_name);
+    const inside_session = environ_map.get("TMUX") == null;
+    if (inside_session) {
+        const err = createAndAttachSession(io, project_path, session_name);
+        return switch (err) {
+            error.FileNotFound => error.TmuxNotFound,
+            else => err,
+        };
     }
 
     const err = switch (action) {
         .session => handleTmuxSession(
             gpa,
             io,
+            reporter,
             project_path,
             session_name,
         ),
@@ -54,29 +62,21 @@ fn createAndAttachSession(
     session_name: []const u8,
 ) process.ReplaceError {
     return process.replace(io, .{
-        .argv = &.{
-            "tmux",
-            "new",
-            "-A",
-            "-s",
-            session_name,
-            "-c",
-            project_path,
-        },
+        .argv = &.{ "tmux", "new", "-A", "-s", session_name, "-c", project_path },
     });
 }
 
-const SessionError = process.ReplaceError || process.RunError || error{TmuxExitError};
+const SessionError = error{TmuxBadTermination} || process.ReplaceError || process.RunError;
 
 /// create a session with `session_name` starting from `project_path`.
 /// assumes it is already inside a session.
 fn handleTmuxSession(
     gpa: Allocator,
     io: Io,
+    reporter: ?*Io.Writer,
     project_path: []const u8,
     session_name: []const u8,
 ) SessionError {
-    // TODO - since we don't use stdout, we can just try to capture stderr
     const new_session_result = try process.run(gpa, io, .{
         .argv = &.{ "tmux", "new", "-ds", session_name, "-c", project_path },
     });
@@ -89,21 +89,18 @@ fn handleTmuxSession(
             // we can ignore if there is a duplicate session,
             // since we will join it either way
             if (!mem.startsWith(u8, new_session_result.stderr, "duplicate session")) {
-                // TODO - diagnostics. maybe log instead of erroring out?
-                return error.TmuxExitError;
+                if (reporter) |r| {
+                    const message = mem.trimEnd(u8, new_session_result.stderr, "\r\n");
+                    r.print("unexpected tmux message while creating session: {q}\n", .{message}) catch {};
+                    r.flush() catch {};
+                }
             }
         },
-        // TODO - diagnostics
-        else => return error.TmuxExitError,
+        else => return error.TmuxBadTermination,
     }
 
     return process.replace(io, .{
-        .argv = &.{
-            "tmux",
-            "switch",
-            "-t",
-            session_name,
-        },
+        .argv = &.{ "tmux", "switch", "-t", session_name },
     });
 }
 
@@ -116,14 +113,7 @@ fn handleTmuxWindow(
     session_name: []const u8,
 ) process.ReplaceError {
     return process.replace(io, .{
-        .argv = &.{
-            "tmux",
-            "new-window",
-            "-c",
-            project_path,
-            "-n",
-            session_name,
-        },
+        .argv = &.{ "tmux", "new-window", "-c", project_path, "-n", session_name },
     });
 }
 

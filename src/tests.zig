@@ -1,7 +1,7 @@
 comptime {
     _ = @import("main.zig");
-    _ = @import("cli.zig");
     _ = @import("config.zig");
-    _ = @import("walk.zig");
-    _ = @import("tmux.zig");
+
+    _ = @import("walk/lib.zig");
+    _ = @import("walk/walk.zig");
 }

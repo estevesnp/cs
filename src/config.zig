@@ -1,148 +1,138 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const fs = std.fs;
-const process = std.process;
-const unicode = std.unicode;
-const json = std.json;
-const testing = std.testing;
-const Allocator = std.mem.Allocator;
+
 const Io = std.Io;
+const Allocator = std.mem.Allocator;
+const EnvironMap = std.process.Environ.Map;
 
-const cli = @import("cli.zig");
-const walk = @import("walk.zig");
-const SearchAction = cli.SearchAction;
+const walk = @import("walk/lib.zig");
 
-const APP_NAME = "cs";
-pub const CONFIG_FILE_NAME = "config.json";
+const appname = "cs-refactor";
+const is_windows = builtin.os.tag == .windows;
+
+pub const config_filename = "config.json";
+pub const roots_filename = "roots.json";
 
 pub const Env = enum {
     CS_CONFIG_PATH,
+    CS_EDITOR,
 
-    pub fn get(self: Env, env_map: *const process.Environ.Map) ?[]const u8 {
-        return env_map.get(@tagName(self));
+    pub fn get(self: Env, env_map: *const EnvironMap) ?[]const u8 {
+        if (env_map.get(@tagName(self))) |value| {
+            if (value.len == 0) return null;
+            return value;
+        }
+        return null;
     }
 };
 
-const DEFAULT_FZF_PREVIEW = switch (builtin.os.tag) {
-    // works in cmd and powershell
-    .windows => "dir {}",
-    else => "ls {}",
+pub const Action = enum {
+    session,
+    window,
+    print,
+};
+
+pub const EditMode = enum {
+    config,
+    roots,
+    dir,
 };
 
 pub const Config = struct {
-    /// directories to search for projects
-    project_roots: []const []const u8 = &.{},
-    /// files or dirs that mark a directory as a `project`
-    project_markers: []const []const u8 = walk.default_project_markers,
-    /// fzf preview command. --no-preview sets this as an empty string
-    preview: []const u8 = DEFAULT_FZF_PREVIEW,
-    /// action to take on project found
-    action: SearchAction = .session,
+    markers: []const []const u8 = walk.default_project_markers,
+    max_depth: usize = walk.default_max_depth,
+    action: Action = .session,
+    preview: []const u8 = if (is_windows) "dir {}" else "ls {}",
+    edit_mode: EditMode = .config,
 };
 
-pub const ConfigContext = struct {
-    config_file: Io.File,
-    config: Config,
-    config_path: []const u8,
+pub const ConfigWithRoots = struct {
+    config: PartialConfig = .{},
+    roots: []const []const u8 = &.{},
+    path: []const u8,
+};
 
-    pub fn deinit(self: *ConfigContext, gpa: Allocator, io: Io) void {
-        gpa.free(self.config_path);
-        self.config_file.close(io);
+pub const PartialConfig = Partial(Config);
+
+fn Partial(T: type) type {
+    const info = switch (@typeInfo(T)) {
+        .@"struct" => |s| s,
+        else => |e| @compileError("Partial(T) only accepts struct types, received " ++ @tagName(e)),
+    };
+
+    var field_types: [info.field_types.len]type = undefined;
+    var field_attrs: [info.field_attrs.len]std.lang.Type.Struct.FieldAttributes = undefined;
+
+    for (info.field_types, &field_types, &field_attrs) |FieldType, *new_type, *new_attr| {
+        new_type.* = ?FieldType;
+
+        const default_value: ?FieldType = null;
+        new_attr.* = .{ .default_value_ptr = &default_value };
     }
-};
 
-pub const OpenConfigError = GetConfigDirPathError || GetConfigContextError;
-
-/// gets the app's config path, then opens and deserializes it.
-/// creates an empty config file if non exists.
-pub fn openConfig(gpa: Allocator, io: Io, environ_map: *const process.Environ.Map) OpenConfigError!ConfigContext {
-    const path = try getConfigDirPath(gpa, environ_map);
-    errdefer gpa.free(path);
-
-    return openConfigFromPath(gpa, io, path);
+    return @Struct(.auto, null, info.field_names, &field_types, &field_attrs);
 }
 
-const GetConfigContextError = Io.Dir.CreateDirError || Io.Dir.OpenError || Io.Dir.StatFileError || json.ParseError(json.Reader);
+pub fn normalizeConfig(partial_config: PartialConfig) Config {
+    var config: Config = .{};
+    inline for (@typeInfo(PartialConfig).@"struct".field_names) |field| {
+        if (@field(partial_config, field)) |val| @field(config, field) = val;
+    }
+    return config;
+}
 
-/// opens and deserializes config from the given path.
-/// creates an empty config file if non exists.
-pub fn openConfigFromPath(gpa: Allocator, io: Io, config_path: []const u8) GetConfigContextError!ConfigContext {
-    var config_dir = try Io.Dir.cwd().createDirPathOpen(io, config_path, .{});
-    defer config_dir.close(io);
+pub fn configDirPath(gpa: Allocator, environ_map: *const EnvironMap) ![]const u8 {
+    if (Env.CS_CONFIG_PATH.get(environ_map)) |cfg_path| {
+        if (cfg_path.len > 0) return gpa.dupe(u8, cfg_path);
+    }
 
-    var config_file = config_dir.openFile(io, CONFIG_FILE_NAME, .{ .mode = .read_write }) catch |err| switch (err) {
-        // create file if none exists
-        error.FileNotFound => return .{
-            .config_file = try config_dir.createFile(io, CONFIG_FILE_NAME, .{}),
-            .config = .{},
-            .config_path = config_path,
-        },
-        else => return err,
+    if (is_windows) {
+        const appdata = environ_map.get("APPDATA") orelse return error.NoAppData;
+        return try Io.Dir.path.join(gpa, &.{ appdata, appname });
+    }
+
+    if (environ_map.get("XDG_CONFIG_HOME")) |xdg_home| {
+        return try Io.Dir.path.join(gpa, &.{ xdg_home, appname });
+    }
+    const home = environ_map.get("HOME") orelse return error.NoHome;
+    return try Io.Dir.path.join(gpa, &.{ home, ".config", appname });
+}
+
+// TODO - deal with bad json
+pub fn readConfigWithRoots(io: Io, arena: Allocator, environ_map: *const EnvironMap) !ConfigWithRoots {
+    const cfg_path = try configDirPath(arena, environ_map);
+    var cfg_dir = Io.Dir.cwd().openDir(io, cfg_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .{ .path = cfg_path },
+        else => |e| return e,
     };
+    defer cfg_dir.close(io);
 
-    var file_buf: [2048]u8 = undefined;
-    var file_reader = config_file.reader(io, &file_buf);
-
-    var json_reader = json.Reader.init(gpa, &file_reader.interface);
-    defer json_reader.deinit();
-
-    const config = json.parseFromTokenSourceLeaky(Config, gpa, &json_reader, .{}) catch |err| {
-        // don't fail if file is empty
-        if (err == error.UnexpectedEndOfInput and try config_file.length(io) == 0) {
-            return .{
-                .config_file = config_file,
-                .config = .{},
-                .config_path = config_path,
-            };
-        }
-        return err;
-    };
+    const config = try parseFile(io, arena, PartialConfig, cfg_dir, config_filename);
+    const roots = try parseFile(io, arena, []const []const u8, cfg_dir, roots_filename);
 
     return .{
-        .config_file = config_file,
-        .config = config,
-        .config_path = config_path,
+        .path = cfg_path,
+        .config = config orelse .{},
+        .roots = roots orelse &.{},
     };
 }
 
-const GetConfigDirPathError = error{ OutOfMemory, HomeNotFound };
-
-pub fn getConfigDirPath(gpa: Allocator, environ_map: *const process.Environ.Map) GetConfigDirPathError![]u8 {
-    if (Env.CS_CONFIG_PATH.get(environ_map)) |cfg_path| {
-        if (cfg_path.len > 0) {
-            return gpa.dupe(u8, cfg_path);
-        }
-    }
-
-    switch (builtin.os.tag) {
-        .windows => {
-            const appdata = environ_map.get("APPDATA") orelse return error.HomeNotFound;
-            return Io.Dir.path.join(gpa, &.{ appdata, APP_NAME });
-        },
-        else => {
-            if (environ_map.get("XDG_CONFIG_HOME")) |xdg_home| {
-                return Io.Dir.path.join(gpa, &.{ xdg_home, APP_NAME });
-            }
-            const home = environ_map.get("HOME") orelse return error.HomeNotFound;
-            return Io.Dir.path.join(gpa, &.{ home, ".config", APP_NAME });
-        },
-    }
+pub fn readConfigFromDir(io: Io, arena: Allocator, dir: Io.Dir) !Config {
+    return try parseFile(io, arena, Config, dir, config_filename) orelse .{};
 }
 
-pub fn updateConfig(io: Io, cfg_file: Io.File, cfg: Config) !void {
-    try cfg_file.setLength(io, 0);
-
-    var buf: [1024]u8 = undefined;
-    var file_bw = cfg_file.writer(io, &buf);
-
-    try file_bw.seekTo(0);
-
-    const file_writer = &file_bw.interface;
-
-    try json.Stringify.value(cfg, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, file_writer);
-    try file_writer.flush();
+pub fn readRootsFromDir(io: Io, arena: Allocator, dir: Io.Dir) ![]const []const u8 {
+    return try parseFile(io, arena, []const []const u8, dir, roots_filename) orelse &.{};
 }
 
-test "ref all decls" {
-    testing.refAllDecls(@This());
+fn parseFile(io: Io, arena: Allocator, T: type, dir: Io.Dir, filename: []const u8) !?T {
+    const data = dir.readFileAlloc(io, filename, arena, .unlimited) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => |e| return e,
+    };
+    return try std.json.parseFromSliceLeaky(T, arena, data, .{ .ignore_unknown_fields = true });
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }
