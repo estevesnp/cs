@@ -28,13 +28,14 @@ pub fn main(init: process.Init) !void {
 
     const args = try init.minimal.args.toSlice(ctx.arena);
 
-    const cmd = parseArgs(args) catch |err| switch (err) {
+    const cmd = parseArgs(&stderr.interface, args) catch |err| switch (err) {
         error.Help => writeHelpAndExit(&ctx.stdout.interface, 0),
         error.Usage => writeHelpAndExit(&ctx.stderr.interface, 1),
     };
 
     switch (cmd) {
         .search => |opts| try search(ctx, opts),
+        .env => |opts| try printEnv(ctx, opts),
         .version => try Io.File.stdout().writeStreamingAll(ctx.io, options.cs_version),
         else => std.debug.print("{t}\n", .{cmd}),
     }
@@ -91,16 +92,34 @@ const usage =
     \\
     \\search:
     \\
+    \\  description: search for projects from configured roots
+    \\
     \\  usage: cs [search] [flags] [project]
     \\
     \\  arguments:
-    \\    project                  query to pre-fill picker. if it has an exact match
-    \\                             to any project, instantly selects it
+    \\    project                   query to pre-fill picker. if it has an exact match
+    \\                              to any project, instantly selects it
     \\
     \\  flags:
-    \\    -a, --action <action>    select action to perform on project selection.
-    \\                             can also choose the action directly, like --print.
-    \\                             options: session, window, print
+    \\    -a, --action <action>     select action to perform on project selection.
+    \\                              can also choose the action directly, like --print.
+    \\                              options: session, window, print
+    \\
+    \\    -m, --max-depth <depth>   how many directories deep to search for in each
+    \\                              root. defaults to 5
+    \\
+    \\
+    \\env:
+    \\  description: display environment information about the program, such as the
+    \\               config path, the config itself and what roots are configured
+    \\               when searching
+    \\
+    \\  usage: cs env [flags]
+    \\    -c, --config <display>    select how to display the config. either display
+    \\                              all possible options (full), or only the ones that
+    \\                              are configured (partial).
+    \\                              can also choose the display directly, like --full.
+    \\                              options: partial (default), full
     \\
 ;
 
@@ -108,12 +127,11 @@ const CmdError = error{ Help, Usage };
 
 const Cmd = union(enum) {
     search: SearchOpts,
-    env,
-    edit,
+    env: EnvOpts,
+    edit, // TODO
     version,
 };
 
-// TODO - custom action to run with sh -c <templated string>, with option to replace
 const SearchOpts = struct {
     query: ?[]const u8,
     preview: ?[]const u8,
@@ -124,28 +142,37 @@ const SearchOpts = struct {
     // TODO - stop iterating on marker match?
     // TODO - roots?
     // TODO - markers?
+    // TODO - custom action to run with sh -c <templated string>, with option to replace
+    // TODO - tmux script?
 };
-fn parseArgs(args: []const []const u8) CmdError!Cmd {
+
+const ConfigDisplay = enum { full, partial };
+
+const EnvOpts = struct {
+    config_display: ?ConfigDisplay,
+};
+
+fn parseArgs(w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
     var it: Iter = .init(args[1..]);
 
     while (it.next()) |arg| {
         if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
         if (eqlAny(arg, &.{ "version", "--version", "-v" })) return .version;
-        if (mem.eql(u8, arg, "env")) return .env;
+        if (mem.eql(u8, arg, "env")) return .{ .env = try parseEnv(&it, w) };
         if (mem.eql(u8, arg, "edit")) return .edit;
 
-        if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it) };
+        if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it, w) };
 
         // defaulting to search, so need to un-consume the arg
         it.prev();
-        return .{ .search = try parseSearch(&it) };
+        return .{ .search = try parseSearch(&it, w) };
     }
 
     // default to search when no args are passed
-    return .{ .search = try parseSearch(&it) };
+    return .{ .search = try parseSearch(&it, w) };
 }
 
-fn parseSearch(it: *Iter) CmdError!SearchOpts {
+fn parseSearch(it: *Iter, w: *Io.Writer) CmdError!SearchOpts {
     var opts: SearchOpts = .{
         .query = null,
         .preview = null,
@@ -162,20 +189,20 @@ fn parseSearch(it: *Iter) CmdError!SearchOpts {
             }
             if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
 
-            if (try getNamedArg(it, arg, &.{ "--action", "-a" })) |named| {
+            if (try getNamedArg(w, it, arg, &.{ "--action", "-a" })) |named| {
                 opts.action = std.meta.stringToEnum(Action, named) orelse
-                    return usageError("invalid action value: {q}", .{named});
+                    return usageError(w, "invalid action value: {q}", .{named});
                 continue;
             }
 
-            if (try getNamedArg(it, arg, &.{ "--preview", "-p" })) |named| {
+            if (try getNamedArg(w, it, arg, &.{ "--preview", "-p" })) |named| {
                 opts.preview = named;
                 continue;
             }
 
-            if (try getNamedArg(it, arg, &.{ "--max-depth", "-m" })) |named| {
+            if (try getNamedArg(w, it, arg, &.{ "--max-depth", "-m" })) |named| {
                 opts.max_depth = std.fmt.parseInt(usize, named, 0) catch
-                    return usageError("invalid max-depth value: {q}", .{named});
+                    return usageError(w, "invalid max-depth value: {q}", .{named});
                 continue;
             }
 
@@ -186,11 +213,37 @@ fn parseSearch(it: *Iter) CmdError!SearchOpts {
                         continue;
                     }
                 }
-                return usageError("invalid flag: {q}", .{arg});
+                return usageError(w, "invalid flag: {q}", .{arg});
+            }
+        }
+        opts.query = arg;
+    }
+
+    return opts;
+}
+
+fn parseEnv(it: *Iter, w: *Io.Writer) CmdError!EnvOpts {
+    var opts: EnvOpts = .{
+        .config_display = null,
+    };
+
+    while (it.next()) |arg| {
+        if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
+
+        if (try getNamedArg(w, it, arg, &.{ "--config", "-c" })) |named| {
+            opts.config_display = std.meta.stringToEnum(ConfigDisplay, named) orelse
+                return usageError(w, "invalid action value: {q}", .{named});
+            continue;
+        }
+
+        if (mem.startsWith(u8, arg, "--")) {
+            if (std.meta.stringToEnum(ConfigDisplay, arg[2..])) |display| {
+                opts.config_display = display;
+                continue;
             }
         }
 
-        opts.query = arg;
+        return usageError(w, "invalid option: {q}", .{arg});
     }
 
     return opts;
@@ -201,9 +254,9 @@ fn eqlAny(needle: []const u8, haystack: []const []const u8) bool {
     return false;
 }
 
-// TODO - use stderr
-fn usageError(comptime fmt: []const u8, args: anytype) CmdError {
-    std.log.err(fmt, args);
+fn usageError(w: *Io.Writer, comptime fmt: []const u8, args: anytype) CmdError {
+    w.print("error: " ++ fmt ++ "\n", args) catch {};
+    w.flush() catch {};
     return CmdError.Usage;
 }
 
@@ -213,8 +266,8 @@ fn usageError(comptime fmt: []const u8, args: anytype) CmdError {
 /// if no flag matches, `null` is returned
 ///
 /// if any flag matches and no argument is provided, prints explanation and
-/// returns `error.UsageError`
-fn getNamedArg(it: *Iter, arg: []const u8, flags: []const []const u8) CmdError!?[]const u8 {
+/// returns `error.UsageError` and reports it to `w`
+fn getNamedArg(w: *Io.Writer, it: *Iter, arg: []const u8, flags: []const []const u8) CmdError!?[]const u8 {
     assert(flags.len > 0);
 
     for (flags) |flag| {
@@ -222,7 +275,7 @@ fn getNamedArg(it: *Iter, arg: []const u8, flags: []const []const u8) CmdError!?
 
         // exact flag, requires arg
         if (arg.len == flag.len) return it.next() orelse
-            usageError("flag {q} requires an argument", .{flag});
+            return usageError(w, "flag {q} requires an argument", .{flag});
 
         // no match
         if (arg[flag.len] != '=') continue;
@@ -231,7 +284,7 @@ fn getNamedArg(it: *Iter, arg: []const u8, flags: []const []const u8) CmdError!?
 
         // no arg after =
         if (named_arg.len == 0)
-            return usageError("flag {q} requires an argument", .{flag});
+            return usageError(w, "flag {q} requires an argument", .{flag});
 
         return named_arg;
     }
@@ -265,7 +318,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const io = ctx.io;
 
     const config_with_roots = try cfg.readConfig(io, arena, ctx.environ_map);
-    const config = config_with_roots.config;
+    const config = cfg.normalizeConfig(config_with_roots.config);
     const roots = config_with_roots.roots;
 
     const preview = opts.preview orelse config.preview;
@@ -511,6 +564,56 @@ fn extractFzfSelection(
             else => error.FzfBadTermination,
         },
         else => error.FzfBadTermination,
+    };
+}
+
+fn printEnv(ctx: Ctx, opts: EnvOpts) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+
+    const config_with_roots = try cfg.readConfig(io, arena, ctx.environ_map);
+
+    const json_opts: std.json.Stringify.Options = .{
+        .emit_null_optional_fields = false,
+        .whitespace = .indent_2,
+    };
+
+    const config_display = opts.config_display orelse .partial;
+
+    switch (config_display) {
+        inline else => |display| {
+            const env: Env(display) = .init(config_with_roots);
+            std.json.Stringify.value(env, json_opts, &ctx.stdout.interface) catch
+                return ctx.stdout.err.?;
+        },
+    }
+    try ctx.stdout.flush();
+}
+
+fn Env(comptime config_display: ConfigDisplay) type {
+    const ConfigType = switch (config_display) {
+        .partial => cfg.PartialConfig,
+        .full => cfg.Config,
+    };
+
+    return struct {
+        env: std.enums.EnumFieldStruct(cfg.Env, []const u8, null),
+        config: ConfigType,
+        roots: []const []const u8,
+
+        fn init(config_with_roots: cfg.ConfigWithRoots) @This() {
+            const config = switch (config_display) {
+                .partial => config_with_roots.config,
+                .full => cfg.normalizeConfig(config_with_roots.config),
+            };
+            return .{
+                .env = .{
+                    .CS_CONFIG_PATH = config_with_roots.path,
+                },
+                .config = config,
+                .roots = config_with_roots.roots,
+            };
+        }
     };
 }
 

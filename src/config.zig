@@ -32,13 +32,9 @@ pub const Config = struct {
 };
 
 pub const ConfigWithRoots = struct {
-    config: Config,
-    roots: []const []const u8,
-
-    pub const default: ConfigWithRoots = .{
-        .config = .{},
-        .roots = &.{},
-    };
+    config: PartialConfig = .{},
+    roots: []const []const u8 = &.{},
+    path: []const u8,
 };
 
 pub const PartialConfig = Partial(Config);
@@ -62,10 +58,11 @@ fn Partial(T: type) type {
     return @Struct(.auto, null, info.field_names, &field_types, &field_attrs);
 }
 
-fn normalizeConfig(partial_config: PartialConfig) Config {
-    var config: Config = undefined;
-    inline for (@typeInfo(PartialConfig).@"struct".field_names) |field|
-        @field(config, field) = @field(partial_config, field) orelse @field(Config.default, field);
+pub fn normalizeConfig(partial_config: PartialConfig) Config {
+    var config: Config = .{};
+    inline for (@typeInfo(PartialConfig).@"struct".field_names) |field| {
+        if (@field(partial_config, field)) |val| @field(config, field) = val;
+    }
     return config;
 }
 
@@ -86,18 +83,20 @@ pub fn configDirPath(gpa: Allocator, environ_map: *const EnvironMap) ![]const u8
     return try Io.Dir.path.join(gpa, &.{ home, ".config", appname });
 }
 
+// TODO - deal with bad json
 pub fn readConfig(io: Io, arena: Allocator, environ_map: *const EnvironMap) !ConfigWithRoots {
     const cfg_path = try configDirPath(arena, environ_map);
     var cfg_dir = Io.Dir.cwd().openDir(io, cfg_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return .default,
+        error.FileNotFound => return .{ .path = cfg_path },
         else => |e| return e,
     };
     defer cfg_dir.close(io);
 
-    const config = try parseFile(io, arena, Config, cfg_dir, "config.json");
+    const config = try parseFile(io, arena, PartialConfig, cfg_dir, "config.json");
     const roots = try parseFile(io, arena, []const []const u8, cfg_dir, "roots.json");
 
     return .{
+        .path = cfg_path,
         .config = config orelse .{},
         .roots = roots orelse &.{},
     };
