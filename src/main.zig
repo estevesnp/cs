@@ -40,6 +40,8 @@ pub fn main(init: process.Init) !void {
         .env => |opts| try printEnv(ctx, opts),
         .edit => |opts| try editConfig(ctx, opts),
         .shell => |opts| try handleShell(ctx, opts),
+        .add_roots => |opts| try addRoots(ctx, opts),
+        .remove_roots => |opts| try removeRoots(ctx, opts),
     }
 
     return process.cleanExit(ctx.io);
@@ -72,12 +74,13 @@ const Ctx = struct {
     }
 
     fn reportf(ctx: Ctx, comptime fmt: []const u8, args: anytype) !void {
-        ctx.stderr.interface.print(fmt, args) catch return ctx.stderr.err.?;
+        ctx.stderr.interface.print(mem.trimEnd(u8, fmt, "\n") ++ "\n", args) catch
+            return ctx.stderr.err.?;
         try ctx.stderr.flush();
     }
 
     fn exit(ctx: Ctx, comptime fmt: []const u8, args: anytype) !noreturn {
-        try ctx.reportf(mem.trimEnd(u8, fmt, "\n") ++ "\n", args);
+        try ctx.reportf(fmt, args);
         process.exit(1);
     }
 };
@@ -93,12 +96,14 @@ const usage =
     \\
     \\subcommands:
     \\
-    \\  search                     search for project
-    \\  env                        print config and environment information
-    \\  edit                       edit config
-    \\  shell                      print shell integrations
-    \\  version                    print version. also accepts --version and -v
-    \\  help                       print this message. also accepts --help and -h
+    \\  search                      search for project
+    \\  env                         print config and environment information
+    \\  edit                        edit config
+    \\  add                         add paths as roots
+    \\  remove                      remove paths from roots
+    \\  shell                       print shell integrations
+    \\  version                     print version. also accepts --version and -v
+    \\  help                        print this message. also accepts --help and -h
     \\
     \\search:
     \\
@@ -146,14 +151,40 @@ const usage =
     \\                              CS_EDITOR -> VISUAL -> EDITOR
     \\
     \\
+    \\add:
+    \\  description: add a number of paths to roots used when searching for projects
+    \\
+    \\  usage: cs add [flags] <path> [paths...]
+    \\
+    \\  arguments:
+    \\    paths                     paths to add. at least one must be provided
+    \\
+    \\  flags:
+    \\    -r, --reset               remove all paths before adding the ones provided
+    \\
+    \\
+    \\remove:
+    \\  description: remove paths from roots used when searching for projects
+    \\
+    \\  usage: cs remove [flags] [paths...]
+    \\
+    \\  arguments:
+    \\    paths                     paths to add. if flag --reset is not being used,
+    \\                              at least one path must be provided
+    \\
+    \\  flags:
+    \\    -r, --reset               remove all paths. when used, no paths can be
+    \\                              provided.
+    \\
+    \\
     \\shell:
     \\  description: print shell integrations using cs to embed in scripts
     \\
     \\  usage : cs shell [shell]
     \\
     \\  arguments:
-    \\    shell                     shell to print integrations for.
-    \\                              in none is provided, try using the SHELL env var.
+    \\    shell                     shell to print integrations for. if no shell is
+    \\                              provided, tries using SHELL from the environment.
     \\                              supported shells: bash, zsh, fish
     \\
 ;
@@ -165,6 +196,8 @@ const Cmd = union(enum) {
     env: EnvOpts,
     edit: EditOpts,
     shell: ShellOpts,
+    add_roots: PathOpts,
+    remove_roots: PathOpts,
     version,
 };
 
@@ -193,6 +226,11 @@ const EditOpts = struct {
     editor: ?[]const u8,
 };
 
+const PathOpts = struct {
+    paths: ?[]const []const u8,
+    reset: ?bool,
+};
+
 const Shell = enum {
     bash,
     zsh,
@@ -211,6 +249,8 @@ fn parseArgs(w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
         if (eqlAny(arg, &.{ "version", "--version", "-v" })) return .version;
         if (mem.eql(u8, arg, "env")) return .{ .env = try parseEnv(&it, w) };
         if (mem.eql(u8, arg, "edit")) return .{ .edit = try parseEdit(&it, w) };
+        if (mem.eql(u8, arg, "add")) return .{ .add_roots = try parsePaths(&it, w) };
+        if (mem.eql(u8, arg, "remove")) return .{ .remove_roots = try parsePaths(&it, w) };
         if (mem.eql(u8, arg, "shell")) return .{ .shell = try parseShell(&it, w) };
 
         if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it, w) };
@@ -329,6 +369,42 @@ fn parseEdit(it: *Iter, w: *Io.Writer) CmdError!EditOpts {
         }
 
         return usageError(w, "invalid option: {q}", .{arg});
+    }
+
+    return opts;
+}
+
+fn parsePaths(it: *Iter, w: *Io.Writer) CmdError!PathOpts {
+    var opts: PathOpts = .{
+        .paths = null,
+        .reset = null,
+    };
+
+    var parsing_flags = true;
+    while (it.next()) |arg| {
+        if (parsing_flags) {
+            if (mem.eql(u8, arg, "--")) {
+                parsing_flags = false;
+                continue;
+            }
+            if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
+
+            if (eqlAny(arg, &.{ "--reset", "-r" })) {
+                opts.reset = true;
+                continue;
+            }
+            if (mem.eql(u8, arg, "--no-reset")) {
+                opts.reset = false;
+                continue;
+            }
+
+            if (mem.startsWith(u8, arg, "-")) return usageError(w, "invalid flag: {q}", .{arg});
+        }
+
+        // get the index of the argument and slice until the end
+        it.prev();
+        opts.paths = it.slice[it.idx..];
+        break;
     }
 
     return opts;
@@ -798,6 +874,85 @@ fn writeFileIfNotExists(
         error.PathAlreadyExists => {},
         else => |e| return e,
     };
+}
+
+const StringSet = std.array_hash_map.String(void);
+
+fn addRoots(ctx: Ctx, opts: PathOpts) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+
+    const paths = opts.paths orelse &.{};
+    if (paths.len == 0) try ctx.exit("must provide paths to add", .{});
+    const reset = opts.reset orelse false;
+
+    const config_dir_path = try cfg.configDirPath(arena, ctx.environ_map);
+    var config_dir = try Io.Dir.cwd().createDirPathOpen(io, config_dir_path, .{});
+    defer config_dir.close(io);
+
+    const roots = if (reset) &.{} else try cfg.readRootsFromDir(io, arena, config_dir);
+
+    const cwd = try process.currentPathAlloc(io, arena);
+    var roots_set: StringSet = try .init(arena, roots, &.{});
+
+    for (paths) |path| {
+        const resolved = try Io.Dir.path.resolve(arena, &.{ cwd, path });
+
+        const gop = try roots_set.getOrPut(arena, resolved);
+        if (gop.found_existing) try ctx.reportf("path {s} already exists", .{resolved});
+    }
+
+    try writeRoots(io, config_dir, roots_set.keys());
+}
+
+fn removeRoots(ctx: Ctx, opts: PathOpts) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+
+    const reset = opts.reset orelse false;
+    const paths = opts.paths orelse &.{};
+
+    const config_dir_path = try cfg.configDirPath(arena, ctx.environ_map);
+    var config_dir = try Io.Dir.cwd().createDirPathOpen(io, config_dir_path, .{});
+    defer config_dir.close(io);
+
+    if (reset) {
+        if (paths.len != 0) try ctx.exit("when using the --reset flag, no paths must be provided", .{});
+
+        try config_dir.writeFile(io, .{
+            .sub_path = cfg.roots_filename,
+            .data = "[]",
+            .flags = .{},
+        });
+        return;
+    }
+
+    if (paths.len == 0) try ctx.exit("must provide paths to remove", .{});
+
+    const roots = try cfg.readRootsFromDir(io, arena, config_dir);
+
+    const cwd = try process.currentPathAlloc(io, arena);
+    var roots_set: StringSet = try .init(arena, roots, &.{});
+
+    for (paths) |path| {
+        const resolved = try Io.Dir.path.resolve(arena, &.{ cwd, path });
+
+        const existed = roots_set.orderedRemove(resolved);
+        if (!existed) try ctx.reportf("path {s} didn't exist", .{resolved});
+    }
+
+    try writeRoots(io, config_dir, roots_set.keys());
+}
+
+fn writeRoots(io: Io, config_dir: Io.Dir, roots: []const []const u8) !void {
+    var root_file = try config_dir.createFile(io, cfg.roots_filename, .{});
+    defer root_file.close(io);
+
+    var root_buf: [512]u8 = undefined;
+    var root_writer = root_file.writer(io, &root_buf);
+    std.json.Stringify.value(roots, .{ .whitespace = .indent_2 }, &root_writer.interface) catch
+        return root_writer.err.?;
+    try root_writer.flush();
 }
 
 fn handleShell(ctx: Ctx, opts: ShellOpts) !void {

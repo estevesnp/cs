@@ -121,6 +121,10 @@ pub fn readConfigFromDir(io: Io, arena: Allocator, dir: Io.Dir) !Config {
     return try parseFile(io, arena, Config, dir, config_filename) orelse .{};
 }
 
+pub fn readRootsFromDir(io: Io, arena: Allocator, dir: Io.Dir) ![]const []const u8 {
+    return try parseFile(io, arena, []const []const u8, dir, roots_filename) orelse &.{};
+}
+
 fn parseFile(io: Io, arena: Allocator, T: type, dir: Io.Dir, filename: []const u8) !?T {
     const data = dir.readFileAlloc(io, filename, arena, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return null,

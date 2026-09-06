@@ -90,12 +90,14 @@ usage: cs [action] [flags]
 
 subcommands:
 
-  search                     search for project
-  env                        print config and environment information
-  edit                       edit config
-  shell                      print shell integrations
-  version                    print version. also accepts --version and -v
-  help                       print this message. also accepts --help and -h
+  search                      search for project
+  env                         print config and environment information
+  edit                        edit config
+  add                         add paths as roots
+  remove                      remove paths from roots
+  shell                       print shell integrations
+  version                     print version. also accepts --version and -v
+  help                        print this message. also accepts --help and -h
 
 search:
 
@@ -143,13 +145,39 @@ edit:
                               CS_EDITOR -> VISUAL -> EDITOR
 
 
+add:
+  description: add a number of paths to roots used when searching for projects
+
+  usage: cs add [flags] <path> [paths...]
+
+  arguments:
+    paths                     paths to add. at least one must be provided
+
+  flags:
+    -r, --reset               remove all paths before adding the ones provided
+
+
+remove:
+  description: remove paths from roots used when searching for projects
+
+  usage: cs remove [flags] [paths...]
+
+  arguments:
+    paths                     paths to add. if flag --reset is not being used,
+                              at least one path must be provided
+
+  flags:
+    -r, --reset               remove all paths. when used, no paths can be
+                              provided.
+
+
 shell:
   description: print shell integrations using cs to embed in scripts
 
   usage : cs shell [shell]
 
   arguments:
-    shell                     shell to print integrations for.
-                              in none is provided, try using the SHELL env var.
+    shell                     shell to print integrations for. if no shell is
+                              provided, tries using SHELL from the environment.
                               supported shells: bash, zsh, fish
 ```
