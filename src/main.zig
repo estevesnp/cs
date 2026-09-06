@@ -30,8 +30,8 @@ pub fn main(init: process.Init) !void {
     const args = try init.minimal.args.toSlice(ctx.arena);
 
     const cmd = parseArgs(&stderr.interface, args) catch |err| switch (err) {
-        error.Help => writeHelpAndExit(&ctx.stdout.interface, 0),
-        error.Usage => writeHelpAndExit(&ctx.stderr.interface, 1),
+        error.Help => try writeHelpAndExit(ctx.stdout),
+        error.Usage => process.exit(1), // assumes usage error has already been printed
     };
 
     switch (cmd) {
@@ -39,6 +39,7 @@ pub fn main(init: process.Init) !void {
         .search => |opts| try search(ctx, opts),
         .env => |opts| try printEnv(ctx, opts),
         .edit => |opts| try editConfig(ctx, opts),
+        .shell => |opts| try handleShell(ctx, opts),
     }
 
     return process.cleanExit(ctx.io);
@@ -81,10 +82,10 @@ const Ctx = struct {
     }
 };
 
-fn writeHelpAndExit(writer: *Io.Writer, status: u8) noreturn {
-    writer.writeAll(usage) catch {};
-    writer.flush() catch {};
-    process.exit(status);
+fn writeHelpAndExit(writer: *Io.File.Writer) !noreturn {
+    writer.interface.writeAll(usage) catch return writer.err.?;
+    try writer.flush();
+    process.exit(0);
 }
 
 const usage =
@@ -95,6 +96,7 @@ const usage =
     \\  search                     search for project
     \\  env                        print config and environment information
     \\  edit                       edit config
+    \\  shell                      print shell integrations
     \\  version                    print version. also accepts --version and -v
     \\  help                       print this message. also accepts --help and -h
     \\
@@ -133,6 +135,8 @@ const usage =
     \\edit:
     \\  description: open the config inside your editor
     \\
+    \\  usage: cs edit [flags]
+    \\
     \\  flags:
     \\    -m, --mode                select what to open in the editor.
     \\                              options: config (default), roots, dir (config dir)
@@ -140,6 +144,17 @@ const usage =
     \\    -e, --editor              select what editor to open the config with.
     \\                              if none is provided, defaults to the environment:
     \\                              CS_EDITOR -> VISUAL -> EDITOR
+    \\
+    \\
+    \\shell:
+    \\  description: print shell integrations using cs to embed in scripts
+    \\
+    \\  usage : cs shell [shell]
+    \\
+    \\  arguments:
+    \\    shell                     shell to print integrations for.
+    \\                              in none is provided, try using the SHELL env var.
+    \\                              supported shells: bash, zsh, fish
     \\
 ;
 
@@ -149,6 +164,7 @@ const Cmd = union(enum) {
     search: SearchOpts,
     env: EnvOpts,
     edit: EditOpts,
+    shell: ShellOpts,
     version,
 };
 
@@ -177,6 +193,16 @@ const EditOpts = struct {
     editor: ?[]const u8,
 };
 
+const Shell = enum {
+    bash,
+    zsh,
+    fish,
+};
+
+const ShellOpts = struct {
+    shell: ?Shell,
+};
+
 fn parseArgs(w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
     var it: Iter = .init(args[1..]);
 
@@ -185,6 +211,7 @@ fn parseArgs(w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
         if (eqlAny(arg, &.{ "version", "--version", "-v" })) return .version;
         if (mem.eql(u8, arg, "env")) return .{ .env = try parseEnv(&it, w) };
         if (mem.eql(u8, arg, "edit")) return .{ .edit = try parseEdit(&it, w) };
+        if (mem.eql(u8, arg, "shell")) return .{ .shell = try parseShell(&it, w) };
 
         if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it, w) };
 
@@ -302,6 +329,24 @@ fn parseEdit(it: *Iter, w: *Io.Writer) CmdError!EditOpts {
         }
 
         return usageError(w, "invalid option: {q}", .{arg});
+    }
+
+    return opts;
+}
+
+fn parseShell(it: *Iter, w: *Io.Writer) CmdError!ShellOpts {
+    var opts: ShellOpts = .{
+        .shell = null,
+    };
+
+    while (it.next()) |arg| {
+        if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
+
+        if (opts.shell != null) return usageError(w, "multiple shells provided", .{});
+
+        const stripped_shell = mem.cutPrefix(u8, arg, "--") orelse arg;
+        opts.shell = std.meta.stringToEnum(Shell, stripped_shell) orelse
+            return usageError(w, "unsupported shell: {q}", .{arg});
     }
 
     return opts;
@@ -753,6 +798,28 @@ fn writeFileIfNotExists(
         error.PathAlreadyExists => {},
         else => |e| return e,
     };
+}
+
+fn handleShell(ctx: Ctx, opts: ShellOpts) !void {
+    const shell = opts.shell orelse
+        determineShell(ctx.environ_map) orelse
+        try ctx.exit("could not determine shell. provide one after the 'shell' subcommand", .{});
+
+    const data = switch (shell) {
+        .bash, .zsh => @embedFile("shell-integration/shell.bash.zsh"),
+        .fish => @embedFile("shell-integration/shell.fish"),
+    };
+
+    ctx.stdout.interface.writeAll(data) catch return ctx.stdout.err.?;
+    try ctx.stdout.flush();
+}
+
+fn determineShell(environ_map: *const process.Environ.Map) ?Shell {
+    if (environ_map.get("SHELL")) |shell_path| {
+        const env_shell = Io.Dir.path.basename(shell_path);
+        return std.meta.stringToEnum(Shell, env_shell);
+    }
+    return null;
 }
 
 test {

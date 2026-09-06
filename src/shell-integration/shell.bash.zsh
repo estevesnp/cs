@@ -4,4 +4,3 @@ csd() {
   [ -n "$cspath" ] || return
   builtin cd -- "$cspath" || return
 }
-
