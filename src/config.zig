@@ -10,11 +10,19 @@ const walk = @import("walk/lib.zig");
 const appname = "cs-refactor";
 const is_windows = builtin.os.tag == .windows;
 
+pub const config_filename = "config.json";
+pub const roots_filename = "roots.json";
+
 pub const Env = enum {
     CS_CONFIG_PATH,
+    CS_EDITOR,
 
     pub fn get(self: Env, env_map: *const EnvironMap) ?[]const u8 {
-        return env_map.get(@tagName(self));
+        if (env_map.get(@tagName(self))) |value| {
+            if (value.len == 0) return null;
+            return value;
+        }
+        return null;
     }
 };
 
@@ -24,11 +32,18 @@ pub const Action = enum {
     print,
 };
 
+pub const EditMode = enum {
+    config,
+    roots,
+    dir,
+};
+
 pub const Config = struct {
     markers: []const []const u8 = walk.default_project_markers,
     max_depth: usize = walk.default_max_depth,
     action: Action = .session,
     preview: []const u8 = if (is_windows) "dir {}" else "ls {}",
+    edit_mode: EditMode = .config,
 };
 
 pub const ConfigWithRoots = struct {
@@ -84,7 +99,7 @@ pub fn configDirPath(gpa: Allocator, environ_map: *const EnvironMap) ![]const u8
 }
 
 // TODO - deal with bad json
-pub fn readConfig(io: Io, arena: Allocator, environ_map: *const EnvironMap) !ConfigWithRoots {
+pub fn readConfigWithRoots(io: Io, arena: Allocator, environ_map: *const EnvironMap) !ConfigWithRoots {
     const cfg_path = try configDirPath(arena, environ_map);
     var cfg_dir = Io.Dir.cwd().openDir(io, cfg_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{ .path = cfg_path },
@@ -92,14 +107,18 @@ pub fn readConfig(io: Io, arena: Allocator, environ_map: *const EnvironMap) !Con
     };
     defer cfg_dir.close(io);
 
-    const config = try parseFile(io, arena, PartialConfig, cfg_dir, "config.json");
-    const roots = try parseFile(io, arena, []const []const u8, cfg_dir, "roots.json");
+    const config = try parseFile(io, arena, PartialConfig, cfg_dir, config_filename);
+    const roots = try parseFile(io, arena, []const []const u8, cfg_dir, roots_filename);
 
     return .{
         .path = cfg_path,
         .config = config orelse .{},
         .roots = roots orelse &.{},
     };
+}
+
+pub fn readConfigFromDir(io: Io, arena: Allocator, dir: Io.Dir) !Config {
+    return try parseFile(io, arena, Config, dir, config_filename) orelse .{};
 }
 
 fn parseFile(io: Io, arena: Allocator, T: type, dir: Io.Dir, filename: []const u8) !?T {

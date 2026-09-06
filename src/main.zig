@@ -14,6 +14,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const Action = cfg.Action;
+const EditMode = cfg.EditMode;
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -34,10 +35,10 @@ pub fn main(init: process.Init) !void {
     };
 
     switch (cmd) {
+        .version => try Io.File.stdout().writeStreamingAll(ctx.io, options.cs_version),
         .search => |opts| try search(ctx, opts),
         .env => |opts| try printEnv(ctx, opts),
-        .version => try Io.File.stdout().writeStreamingAll(ctx.io, options.cs_version),
-        else => std.debug.print("{t}\n", .{cmd}),
+        .edit => |opts| try editConfig(ctx, opts),
     }
 
     return process.cleanExit(ctx.io);
@@ -45,6 +46,7 @@ pub fn main(init: process.Init) !void {
 
 const Ctx = struct {
     io: Io,
+    gpa: Allocator,
     arena: Allocator,
     environ_map: *process.Environ.Map,
 
@@ -54,6 +56,7 @@ const Ctx = struct {
     fn init(proc_init: process.Init, stdout: *Io.File.Writer, stderr: *Io.File.Writer) Ctx {
         return .{
             .io = proc_init.io,
+            .gpa = proc_init.gpa,
             .arena = proc_init.arena.allocator(),
             .environ_map = proc_init.environ_map,
             .stdout = stdout,
@@ -67,8 +70,13 @@ const Ctx = struct {
         try ctx.stderr.flush();
     }
 
-    fn exit(ctx: Ctx, data: []const u8) !noreturn {
-        try ctx.report(data);
+    fn reportf(ctx: Ctx, comptime fmt: []const u8, args: anytype) !void {
+        ctx.stderr.interface.print(fmt, args) catch return ctx.stderr.err.?;
+        try ctx.stderr.flush();
+    }
+
+    fn exit(ctx: Ctx, comptime fmt: []const u8, args: anytype) !noreturn {
+        try ctx.reportf(mem.trimEnd(u8, fmt, "\n") ++ "\n", args);
         process.exit(1);
     }
 };
@@ -121,6 +129,18 @@ const usage =
     \\                              can also choose the display directly, like --full.
     \\                              options: partial (default), full
     \\
+    \\
+    \\edit:
+    \\  description: open the config inside your editor
+    \\
+    \\  flags:
+    \\    -m, --mode                select what to open in the editor.
+    \\                              options: config (default), roots, dir (config dir)
+    \\
+    \\    -e, --editor              select what editor to open the config with.
+    \\                              if none is provided, defaults to the environment:
+    \\                              CS_EDITOR -> VISUAL -> EDITOR
+    \\
 ;
 
 const CmdError = error{ Help, Usage };
@@ -128,7 +148,7 @@ const CmdError = error{ Help, Usage };
 const Cmd = union(enum) {
     search: SearchOpts,
     env: EnvOpts,
-    edit, // TODO
+    edit: EditOpts,
     version,
 };
 
@@ -152,6 +172,11 @@ const EnvOpts = struct {
     config_display: ?ConfigDisplay,
 };
 
+const EditOpts = struct {
+    mode: ?EditMode,
+    editor: ?[]const u8,
+};
+
 fn parseArgs(w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
     var it: Iter = .init(args[1..]);
 
@@ -159,11 +184,11 @@ fn parseArgs(w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
         if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
         if (eqlAny(arg, &.{ "version", "--version", "-v" })) return .version;
         if (mem.eql(u8, arg, "env")) return .{ .env = try parseEnv(&it, w) };
-        if (mem.eql(u8, arg, "edit")) return .edit;
+        if (mem.eql(u8, arg, "edit")) return .{ .edit = try parseEdit(&it, w) };
 
         if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it, w) };
 
-        // defaulting to search, so need to un-consume the arg
+        // defaulting to search, so we need to un-consume the arg
         it.prev();
         return .{ .search = try parseSearch(&it, w) };
     }
@@ -232,13 +257,46 @@ fn parseEnv(it: *Iter, w: *Io.Writer) CmdError!EnvOpts {
 
         if (try getNamedArg(w, it, arg, &.{ "--config", "-c" })) |named| {
             opts.config_display = std.meta.stringToEnum(ConfigDisplay, named) orelse
-                return usageError(w, "invalid action value: {q}", .{named});
+                return usageError(w, "invalid config display: {q}", .{named});
             continue;
         }
 
         if (mem.startsWith(u8, arg, "--")) {
             if (std.meta.stringToEnum(ConfigDisplay, arg[2..])) |display| {
                 opts.config_display = display;
+                continue;
+            }
+        }
+
+        return usageError(w, "invalid option: {q}", .{arg});
+    }
+
+    return opts;
+}
+
+fn parseEdit(it: *Iter, w: *Io.Writer) CmdError!EditOpts {
+    var opts: EditOpts = .{
+        .mode = null,
+        .editor = null,
+    };
+
+    while (it.next()) |arg| {
+        if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
+
+        if (try getNamedArg(w, it, arg, &.{ "--mode", "-m" })) |named| {
+            opts.mode = std.meta.stringToEnum(EditMode, named) orelse
+                return usageError(w, "invalid edit mode: {q}", .{named});
+            continue;
+        }
+
+        if (try getNamedArg(w, it, arg, &.{ "--editor", "-e" })) |named| {
+            opts.editor = named;
+            continue;
+        }
+
+        if (mem.startsWith(u8, arg, "--")) {
+            if (std.meta.stringToEnum(EditMode, arg[2..])) |mode| {
+                opts.mode = mode;
                 continue;
             }
         }
@@ -317,7 +375,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const arena = ctx.arena;
     const io = ctx.io;
 
-    const config_with_roots = try cfg.readConfig(io, arena, ctx.environ_map);
+    const config_with_roots = try cfg.readConfigWithRoots(io, arena, ctx.environ_map);
     const config = cfg.normalizeConfig(config_with_roots.config);
     const roots = config_with_roots.roots;
 
@@ -325,7 +383,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const query = opts.query orelse "";
 
     var fzf_proc = spawnFzf(io, preview, query) catch |err| switch (err) {
-        error.FileNotFound => try ctx.exit("fzf binary not found in path\n"),
+        error.FileNotFound => try ctx.exit("fzf binary not found in path", .{}),
         else => |e| return e,
     };
 
@@ -354,7 +412,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const selection_opt = searchProject(ctx, walk_opts, fzf_proc_rw) catch |err| {
         try ctx.report(walk_reporter.written());
         switch (err) {
-            error.NoProjectsFound => try ctx.exit("no projects found\n"),
+            error.NoProjectsFound => try ctx.exit("no projects found", .{}),
             else => |e| return e,
         }
     };
@@ -371,7 +429,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
             try ctx.stdout.flush();
         },
         inline .session, .window => |a| {
-            if (is_windows) try ctx.exit("tmux is not supported on windows\n");
+            if (is_windows) try ctx.exit("tmux is not supported on windows", .{});
 
             const tmux_action = @field(tmux.Action, @tagName(a));
             const err = tmux.handleTmux(
@@ -383,7 +441,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
                 selection,
             );
             switch (err) {
-                error.TmuxNotFound => try ctx.exit("tmux binary not found in path\n"),
+                error.TmuxNotFound => try ctx.exit("tmux binary not found in path", .{}),
                 else => return err,
             }
         },
@@ -571,7 +629,7 @@ fn printEnv(ctx: Ctx, opts: EnvOpts) !void {
     const io = ctx.io;
     const arena = ctx.arena;
 
-    const config_with_roots = try cfg.readConfig(io, arena, ctx.environ_map);
+    const config_with_roots = try cfg.readConfigWithRoots(io, arena, ctx.environ_map);
 
     const json_opts: std.json.Stringify.Options = .{
         .emit_null_optional_fields = false,
@@ -582,7 +640,7 @@ fn printEnv(ctx: Ctx, opts: EnvOpts) !void {
 
     switch (config_display) {
         inline else => |display| {
-            const env: Env(display) = .init(config_with_roots);
+            const env: Env(display) = .init(config_with_roots, ctx.environ_map);
             std.json.Stringify.value(env, json_opts, &ctx.stdout.interface) catch
                 return ctx.stdout.err.?;
         },
@@ -601,7 +659,7 @@ fn Env(comptime config_display: ConfigDisplay) type {
         config: ConfigType,
         roots: []const []const u8,
 
-        fn init(config_with_roots: cfg.ConfigWithRoots) @This() {
+        fn init(config_with_roots: cfg.ConfigWithRoots, environ_map: *const process.Environ.Map) @This() {
             const config = switch (config_display) {
                 .partial => config_with_roots.config,
                 .full => cfg.normalizeConfig(config_with_roots.config),
@@ -609,11 +667,91 @@ fn Env(comptime config_display: ConfigDisplay) type {
             return .{
                 .env = .{
                     .CS_CONFIG_PATH = config_with_roots.path,
+                    .CS_EDITOR = getCsEditor(environ_map) orelse "",
                 },
                 .config = config,
                 .roots = config_with_roots.roots,
             };
         }
+    };
+}
+
+fn getEnv(environ_map: *const process.Environ.Map, key: []const u8) ?[]const u8 {
+    if (environ_map.get(key)) |value| {
+        if (value.len == 0) return null;
+        return value;
+    }
+    return null;
+}
+
+fn getCsEditor(environ_map: *const process.Environ.Map) ?[]const u8 {
+    return cfg.Env.CS_EDITOR.get(environ_map) orelse
+        getEnv(environ_map, "VISUAL") orelse
+        getEnv(environ_map, "EDITOR");
+}
+
+fn editConfig(ctx: Ctx, opts: EditOpts) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+
+    const config_dir_path = try cfg.configDirPath(arena, ctx.environ_map);
+    var config_dir = try Io.Dir.cwd().createDirPathOpen(io, config_dir_path, .{});
+    defer config_dir.close(io);
+
+    try writeFileIfNotExists(io, config_dir, cfg.config_filename, "{}");
+    try writeFileIfNotExists(io, config_dir, cfg.roots_filename, "[]");
+
+    const config = try cfg.readConfigFromDir(io, arena, config_dir);
+
+    const editor = opts.editor orelse
+        getCsEditor(ctx.environ_map) orelse
+        try ctx.exit(
+            "no editor found. either configure the CS_EDITOR, EDITOR or VISUAL environment variables, or use the --editor flag",
+            .{},
+        );
+
+    const mode = opts.mode orelse config.edit_mode;
+
+    const filepath = switch (mode) {
+        .config => try Io.Dir.path.join(arena, &.{ config_dir_path, cfg.config_filename }),
+        .roots => try Io.Dir.path.join(arena, &.{ config_dir_path, cfg.roots_filename }),
+        .dir => config_dir_path,
+    };
+
+    var proc = process.spawn(io, .{
+        .argv = &.{ editor, filepath },
+    }) catch |err| switch (err) {
+        error.FileNotFound => try ctx.exit("editor {q} not found in path", .{editor}),
+        else => |e| return e,
+    };
+    defer proc.kill(io);
+
+    const term = try proc.wait(io);
+    if (term.success()) return;
+
+    ctx.stderr.interface.print("bad termination while editing: {s} ", .{editor}) catch
+        return ctx.stderr.err.?;
+    term.format(&ctx.stderr.interface) catch return ctx.stderr.err.?;
+    ctx.stderr.interface.writeByte('\n') catch return ctx.stderr.err.?;
+    try ctx.stderr.flush();
+}
+
+fn writeFileIfNotExists(
+    io: Io,
+    dir: Io.Dir,
+    filename: []const u8,
+    default_data: []const u8,
+) !void {
+    dir.writeFile(io, .{
+        .sub_path = filename,
+        .data = default_data,
+        .flags = .{
+            .truncate = false,
+            .exclusive = true,
+        },
+    }) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => |e| return e,
     };
 }
 
