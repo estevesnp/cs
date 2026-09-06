@@ -22,104 +22,134 @@ zig build -Doptimize=ReleaseSafe
 ```
 
 3. add executable to PATH. default build path is `path/to/repo/zig-out/bin/cs`
+   - build path can be overwritten by using the `-p` flag, like `zig build -Doptimize=ReleaseSafe -p ~/.local/bin`
 
 ## config
 
-the config path is `$XDG_CONFIG_HOME/cs/config.json` in linux/mac (with a fallback to `HOME`),
-and `%APPDATA%\cs\config.json` in windows.
+the config dir path is `$XDG_CONFIG_HOME/cs` in linux/mac (with a fallback to `$HOME/.config/cs`),
+and `%APPDATA%\cs` in windows.
 
 the config path can be overwritten by setting the `CS_CONFIG_PATH` environment variable.
 
-can configure options such as:
+the config consists of two files:
 
-- markers for `cs` to identify a project
-- custom [preview option to fzf](https://github.com/junegunn/fzf?tab=readme-ov-file#preview-window)
-- default action to perform upon project selection
-  - `session` - open new tmux session
-  - `window` - open new tmux window
-  - `print` - print out selected project (e.g. for scripting)
-- etc
+- `config.json` - general config
+- `roots.json` - local paths to start checking for projects
 
-example config:
+example `config.json`:
 
 ```json
 {
-  "project_roots": ["/home/estevesnp/proj", "/home/estevesnp/pers"],
   "project_markers": [".git", ".jj", ".csm"],
   "preview": "eza {} -a1 --color=always --icons",
-  "action": "session"
+  "max_depth": 10
 }
 ```
+
+example `roots.json`:
+
+```json
+["/home/estevesnp/work", "/home/estevesnp/pers"]
+```
+
+to see the full config options, you can look at the `config` property of the
+output of `cs env --full`, which contains all default config values
 
 ## shell integration
 
 current shell integrations:
 
-- `csd` - cd to chosen project using `cs --print`
+- `csd` - cd to chosen project using `cs search --print`
 
 ### setting up shell integration
 
 - zsh
 
 ```zsh
-source <(cs --shell zsh)
+source <(cs shell zsh)
 ```
 
 - bash
 
 ```bash
-eval "$(cs --shell bash)"
+eval "$(cs shell bash)"
 ```
 
 - fish
 
 ```fish
-cs --shell fish | source
+cs shell fish | source
 ```
 
 ## usage
 
+output of `cs --help`
+
 ```
-usage: cs [project] [flags]
+usage: cs [action] [flags]
 
-arguments:
+subcommands:
 
-  project                          project to automatically open if found
+  search                     search for project
+  env                        print config and environment information
+  edit                       edit config
+  shell                      print shell integrations
+  version                    print version. also accepts --version and -v
+  help                       print this message. also accepts --help and -h
+
+search:
+
+  description: search for projects from configured roots
+
+  usage: cs [search] [flags] [project]
+
+  arguments:
+    project                   query to pre-fill picker. if it has an exact match
+                              to any project, instantly selects it
+
+  flags:
+    -a, --action <action>     select action to perform on project selection.
+                              can also choose the action directly, like --print.
+                              options: session, window, print
+
+    -m, --max-depth <depth>   how many directories deep to search for in each
+                              root. defaults to 5
 
 
-flags:
+env:
+  description: display environment information about the program, such as the
+               config path, the config itself and what roots are configured
+               when searching
 
-  -h, --help                       print this message
-  -v, -V, --version                print version
-  --env                            print config and environment information
-  --edit [editor]                  open config in editor. if no editor is
-                                   provided, the following env vars are checked:
-                                     - VISUAL
-                                     - EDITOR
-  -a, --add-paths <path> [...]     update config adding search paths
-  -s, --set-paths <path> [...]     update config overriding search paths
-  -r, --remove-paths <path> [...]  update config removing search paths
-  --shell [shell]                  print out shell integration functions.
-                                     options: zsh, bash
-                                     tries to detect shell if none is provided
-  --no-preview                     disables fzf preview
-  --preview <str>                  preview command to pass to fzf
-  --action  <action>               action to execute after finding project.
-                                     options: session, window, print
-                                     can call the action directly, e.g. --print
-                                     can also do -w instead of --window
+  usage: cs env [flags]
+    -c, --config <display>    select how to display the config. either display
+                              all possible options (full), or only the ones that
+                              are configured (partial).
+                              can also choose the display directly, like --full.
+                              options: partial (default), full
 
 
-description:
+edit:
+  description: open the config inside your editor
 
-  search configured paths for projects and run an action on the selection,
-  such as creating a new tmux session from it or printing out it's path
+  usage: cs edit [flags]
+
+  flags:
+    -m, --mode                select what to open in the editor.
+                              options: config (default), roots, dir (config dir)
+
+    -e, --editor              select what editor to open the config with.
+                              if none is provided, defaults to the environment:
+                              CS_EDITOR -> VISUAL -> EDITOR
+
+
+shell:
+  description: print shell integrations using cs to embed in scripts
+
+  usage : cs shell [shell]
+
+  arguments:
+    shell                     shell to print integrations for.
+                              in none is provided, try using the SHELL env var.
+                              supported shells: bash, zsh, fish
 ```
-
-## TODO
-
-- project marker as cli option?
-- project roots as cli option?
-- tmux script?
-- propper error diagnostics and error handling
-- native frontend
