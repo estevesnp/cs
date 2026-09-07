@@ -14,9 +14,7 @@ pub const StringSet = std.array_hash_map.Custom([:0]const u8, void, std.array_ha
 pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
 pub const default_max_depth = 5;
 
-pub const SearchError =
-    error{NoRootPaths} ||
-    Io.File.OpenError || Allocator.Error || Writer.Error || Io.Cancelable || Io.QueueClosedError;
+pub const SearchError = error{NoRootPaths} || Io.File.OpenError || Allocator.Error || Io.Cancelable;
 
 pub const SearchOpts = struct {
     /// optional queue to send paths to
@@ -158,6 +156,9 @@ fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOp
 fn searchDir(ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
     const gpa = ctx.gpa;
     const io = ctx.io;
+
+    // TODO - check if needed for every OS
+    try io.checkCancel();
 
     if (depth > ctx.max_depth) return;
 
