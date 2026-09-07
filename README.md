@@ -81,6 +81,15 @@ eval "$(cs shell bash)"
 cs shell fish | source
 ```
 
+## tmux integration
+
+here are some useful binds to display a popup window with cs:
+
+```tmux
+bind C-o display-popup -E "cs search --session --no-preview"
+bind C-w display-popup -E "cs search --window --no-preview"
+```
+
 ## usage
 
 output of `cs --help`
@@ -125,6 +134,10 @@ search:
 
     -m, --max-depth <depth>   how many directories deep to search for in each
                               root. defaults to 5
+
+    -p, --preview <preview>   preview to use on fzf. e.g.: 'ls {}'
+
+    --no-preview              equivalent to --preview=''. disables fzf preview
 
 
 env:

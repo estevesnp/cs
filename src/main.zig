@@ -148,6 +148,10 @@ const usage =
     \\    -m, --max-depth <depth>   how many directories deep to search for in each
     \\                              root. defaults to 5
     \\
+    \\    -p, --preview <preview>   preview to use on fzf. e.g.: 'ls {}'
+    \\
+    \\    --no-preview              equivalent to --preview=''. disables fzf preview
+    \\
     \\
     \\env:
     \\  description: display environment information about the program, such as the
@@ -315,14 +319,19 @@ fn parseSearch(it: *Iter, w: *Io.Writer) CmdError!SearchOpts {
                 continue;
             }
 
+            if (try getNamedArg(w, it, arg, &.{ "--max-depth", "-m" })) |named| {
+                opts.max_depth = std.fmt.parseInt(usize, named, 0) catch
+                    return usageError(w, "invalid max-depth value: {q}", .{named});
+                continue;
+            }
+
             if (try getNamedArg(w, it, arg, &.{ "--preview", "-p" })) |named| {
                 opts.preview = named;
                 continue;
             }
 
-            if (try getNamedArg(w, it, arg, &.{ "--max-depth", "-m" })) |named| {
-                opts.max_depth = std.fmt.parseInt(usize, named, 0) catch
-                    return usageError(w, "invalid max-depth value: {q}", .{named});
+            if (mem.eql(u8, arg, "--no-preview")) {
+                opts.preview = "";
                 continue;
             }
 
