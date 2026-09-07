@@ -39,9 +39,8 @@ pub fn main(init: process.Init) !void {
         .search => |opts| try search(ctx, opts),
         .env => |opts| try printEnv(ctx, opts),
         .edit => |opts| try editConfig(ctx, opts),
+        .roots => |opts| try updateRoots(ctx, opts),
         .shell => |opts| try handleShell(ctx, opts),
-        .add_roots => |opts| try addRoots(ctx, opts),
-        .remove_roots => |opts| try removeRoots(ctx, opts),
     }
 
     return process.cleanExit(ctx.io);
@@ -99,8 +98,7 @@ const usage =
     \\  search                      search for project
     \\  env                         print config and environment information
     \\  edit                        edit config
-    \\  add                         add paths as roots
-    \\  remove                      remove paths from roots
+    \\  roots                       add or remove paths to roots. also accepts root
     \\  shell                       print shell integrations
     \\  version                     print version. also accepts --version and -v
     \\  help                        print this message. also accepts --help and -h
@@ -151,30 +149,25 @@ const usage =
     \\                              CS_EDITOR -> VISUAL -> EDITOR
     \\
     \\
-    \\add:
-    \\  description: add a number of paths to roots used when searching for projects
+    \\roots:
+    \\  description: add or remove the paths that are configured as roots
     \\
-    \\  usage: cs add [flags] <path> [paths...]
-    \\
-    \\  arguments:
-    \\    paths                     paths to add. at least one must be provided
-    \\
-    \\  flags:
-    \\    -r, --reset               remove all paths before adding the ones provided
-    \\
-    \\
-    \\remove:
-    \\  description: remove paths from roots used when searching for projects
-    \\
-    \\  usage: cs remove [flags] [paths...]
+    \\  usage: cs roots [action] [flags] [paths]
     \\
     \\  arguments:
-    \\    paths                     paths to add. if flag --reset is not being used,
-    \\                              at least one path must be provided
+    \\    action                    what to do regarding the provided paths.
+    \\                              options: add, remove
+    \\
+    \\    paths                     paths to perform the action on.
+    \\                              when adding, paths must always be provided.
+    \\                              when removing, paths must be provided unless the
+    \\                              --clear flag is provided.
     \\
     \\  flags:
-    \\    -r, --reset               remove all paths. when used, no paths can be
-    \\                              provided.
+    \\    -c, --clear               remove all paths before performing an action.
+    \\                              can be used with 'remove' to clear out all roots
+    \\
+    \\    --no-clear                opposite of --clear
     \\
     \\
     \\shell:
@@ -196,8 +189,7 @@ const Cmd = union(enum) {
     env: EnvOpts,
     edit: EditOpts,
     shell: ShellOpts,
-    add_roots: PathOpts,
-    remove_roots: PathOpts,
+    roots: RootOpts,
     version,
 };
 
@@ -226,9 +218,15 @@ const EditOpts = struct {
     editor: ?[]const u8,
 };
 
-const PathOpts = struct {
+const RootAction = enum {
+    add,
+    remove,
+};
+
+const RootOpts = struct {
+    action: ?RootAction,
     paths: ?[]const []const u8,
-    reset: ?bool,
+    clear: ?bool,
 };
 
 const Shell = enum {
@@ -249,8 +247,7 @@ fn parseArgs(w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
         if (eqlAny(arg, &.{ "version", "--version", "-v" })) return .version;
         if (mem.eql(u8, arg, "env")) return .{ .env = try parseEnv(&it, w) };
         if (mem.eql(u8, arg, "edit")) return .{ .edit = try parseEdit(&it, w) };
-        if (mem.eql(u8, arg, "add")) return .{ .add_roots = try parsePaths(&it, w) };
-        if (mem.eql(u8, arg, "remove")) return .{ .remove_roots = try parsePaths(&it, w) };
+        if (eqlAny(arg, &.{ "roots", "root" })) return .{ .roots = try parseRoots(&it, w) };
         if (mem.eql(u8, arg, "shell")) return .{ .shell = try parseShell(&it, w) };
 
         if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it, w) };
@@ -374,10 +371,11 @@ fn parseEdit(it: *Iter, w: *Io.Writer) CmdError!EditOpts {
     return opts;
 }
 
-fn parsePaths(it: *Iter, w: *Io.Writer) CmdError!PathOpts {
-    var opts: PathOpts = .{
+fn parseRoots(it: *Iter, w: *Io.Writer) CmdError!RootOpts {
+    var opts: RootOpts = .{
+        .action = null,
         .paths = null,
-        .reset = null,
+        .clear = null,
     };
 
     var parsing_flags = true;
@@ -389,13 +387,17 @@ fn parsePaths(it: *Iter, w: *Io.Writer) CmdError!PathOpts {
             }
             if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
 
-            if (eqlAny(arg, &.{ "--reset", "-r" })) {
-                opts.reset = true;
+            if (eqlAny(arg, &.{ "--clear", "-c" })) {
+                opts.clear = true;
                 continue;
             }
-            if (mem.eql(u8, arg, "--no-reset")) {
-                opts.reset = false;
+            if (mem.eql(u8, arg, "--no-clear")) {
+                opts.clear = false;
                 continue;
+            }
+            if (std.meta.stringToEnum(RootAction, arg)) |action| {
+                if (opts.action != null) return usageError(w, "duplicate actions provided", .{});
+                opts.action = action;
             }
 
             if (mem.startsWith(u8, arg, "-")) return usageError(w, "invalid flag: {q}", .{arg});
@@ -878,19 +880,31 @@ fn writeFileIfNotExists(
 
 const StringSet = std.array_hash_map.String(void);
 
-fn addRoots(ctx: Ctx, opts: PathOpts) !void {
+fn updateRoots(ctx: Ctx, opts: RootOpts) !void {
     const io = ctx.io;
     const arena = ctx.arena;
 
+    const action = opts.action orelse .add;
     const paths = opts.paths orelse &.{};
-    if (paths.len == 0) try ctx.exit("must provide paths to add", .{});
-    const reset = opts.reset orelse false;
+    const clear = opts.clear orelse false;
 
     const config_dir_path = try cfg.configDirPath(arena, ctx.environ_map);
     var config_dir = try Io.Dir.cwd().createDirPathOpen(io, config_dir_path, .{});
     defer config_dir.close(io);
 
-    const roots = if (reset) &.{} else try cfg.readRootsFromDir(io, arena, config_dir);
+    switch (action) {
+        .add => try addRoots(ctx, config_dir, paths, clear),
+        .remove => try removeRoots(ctx, config_dir, paths, clear),
+    }
+}
+
+fn addRoots(ctx: Ctx, config_dir: Io.Dir, paths: []const []const u8, clear: bool) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+
+    if (paths.len == 0) try ctx.exit("must provide paths to add", .{});
+
+    const roots = if (clear) &.{} else try cfg.readRootsFromDir(io, arena, config_dir);
 
     const cwd = try process.currentPathAlloc(io, arena);
     var roots_set: StringSet = try .init(arena, roots, &.{});
@@ -905,18 +919,11 @@ fn addRoots(ctx: Ctx, opts: PathOpts) !void {
     try writeRoots(io, config_dir, roots_set.keys());
 }
 
-fn removeRoots(ctx: Ctx, opts: PathOpts) !void {
+fn removeRoots(ctx: Ctx, config_dir: Io.Dir, paths: []const []const u8, clear: bool) !void {
     const io = ctx.io;
     const arena = ctx.arena;
 
-    const reset = opts.reset orelse false;
-    const paths = opts.paths orelse &.{};
-
-    const config_dir_path = try cfg.configDirPath(arena, ctx.environ_map);
-    var config_dir = try Io.Dir.cwd().createDirPathOpen(io, config_dir_path, .{});
-    defer config_dir.close(io);
-
-    if (reset) {
+    if (clear) {
         if (paths.len != 0) try ctx.exit("when using the --reset flag, no paths must be provided", .{});
 
         try config_dir.writeFile(io, .{

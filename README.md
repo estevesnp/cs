@@ -93,8 +93,7 @@ subcommands:
   search                      search for project
   env                         print config and environment information
   edit                        edit config
-  add                         add paths as roots
-  remove                      remove paths from roots
+  roots                       add or remove paths to roots. also accepts root
   shell                       print shell integrations
   version                     print version. also accepts --version and -v
   help                        print this message. also accepts --help and -h
@@ -145,30 +144,25 @@ edit:
                               CS_EDITOR -> VISUAL -> EDITOR
 
 
-add:
-  description: add a number of paths to roots used when searching for projects
+roots:
+  description: add or remove the paths that are configured as roots
 
-  usage: cs add [flags] <path> [paths...]
-
-  arguments:
-    paths                     paths to add. at least one must be provided
-
-  flags:
-    -r, --reset               remove all paths before adding the ones provided
-
-
-remove:
-  description: remove paths from roots used when searching for projects
-
-  usage: cs remove [flags] [paths...]
+  usage: cs roots [action] [flags] [paths]
 
   arguments:
-    paths                     paths to add. if flag --reset is not being used,
-                              at least one path must be provided
+    action                    what to do regarding the provided paths.
+                              options: add, remove
+
+    paths                     paths to perform the action on.
+                              when adding, paths must always be provided.
+                              when removing, paths must be provided unless the
+                              --clear flag is provided.
 
   flags:
-    -r, --reset               remove all paths. when used, no paths can be
-                              provided.
+    -c, --clear               remove all paths before performing an action.
+                              can be used with 'remove' to clear out all roots
+
+    --no-clear                opposite of --clear
 
 
 shell:
