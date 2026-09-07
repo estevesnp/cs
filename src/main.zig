@@ -398,6 +398,7 @@ fn parseRoots(it: *Iter, w: *Io.Writer) CmdError!RootOpts {
             if (std.meta.stringToEnum(RootAction, arg)) |action| {
                 if (opts.action != null) return usageError(w, "duplicate actions provided", .{});
                 opts.action = action;
+                continue;
             }
 
             if (mem.startsWith(u8, arg, "-")) return usageError(w, "invalid flag: {q}", .{arg});
