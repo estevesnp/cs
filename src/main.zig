@@ -67,6 +67,22 @@ const Ctx = struct {
         };
     }
 
+    fn stdoutW(ctx: Ctx) *Io.Writer {
+        return &ctx.stdout.interface;
+    }
+
+    fn stderrW(ctx: Ctx) *Io.Writer {
+        return &ctx.stderr.interface;
+    }
+
+    fn stdoutErr(ctx: Ctx) Io.File.Writer.Error {
+        return ctx.stdout.err.?;
+    }
+
+    fn stderrErr(ctx: Ctx) Io.File.Writer.Error {
+        return ctx.stderr.err.?;
+    }
+
     fn report(ctx: Ctx, data: []const u8) !void {
         if (data.len == 0) return;
         ctx.stderr.interface.writeAll(data) catch return ctx.stderr.err.?;
@@ -213,7 +229,6 @@ const SearchOpts = struct {
     // TODO - stop iterating on marker match?
     // TODO - roots?
     // TODO - markers?
-    // TODO - custom action to run with sh -c <templated string>, with option to replace
 };
 
 const ConfigDisplay = enum { full, partial };
@@ -519,7 +534,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const arena = ctx.arena;
     const io = ctx.io;
 
-    const config_with_roots = try cfg.readConfigWithRoots(io, arena, ctx.environ_map);
+    const config_with_roots = try cfg.readConfigWithRoots(io, arena, ctx.environ_map, ctx.stderrW());
     const config = cfg.normalizeConfig(config_with_roots.config);
     const roots = config_with_roots.roots;
 
@@ -554,7 +569,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const action = opts.action orelse config.action;
     switch (action) {
         .print => {
-            ctx.stdout.interface.writeAll(selection) catch return ctx.stdout.err.?;
+            ctx.stdoutW().writeAll(selection) catch return ctx.stdoutErr();
             try ctx.stdout.flush();
         },
         inline .session, .window => |a| {
@@ -565,7 +580,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
                 arena,
                 io,
                 ctx.environ_map,
-                &ctx.stderr.interface,
+                ctx.stderrW(),
                 tmux_action,
                 selection,
             );
@@ -581,7 +596,7 @@ fn searchBlocking(ctx: Ctx, opts: WalkOpts, preview: []const u8) !?[]const u8 {
     const arena = ctx.arena;
     const io = ctx.io;
 
-    const projects = try searchProjects(io, arena, opts, &ctx.stderr.interface, null);
+    const projects = try searchProjects(io, arena, opts, ctx.stderrW(), null);
     if (matchProject(opts.query, projects)) |match| return match;
 
     var fzf_proc: FzfProc = undefined;
@@ -813,7 +828,7 @@ fn printEnv(ctx: Ctx, opts: EnvOpts) !void {
     const io = ctx.io;
     const arena = ctx.arena;
 
-    const config_with_roots = try cfg.readConfigWithRoots(io, arena, ctx.environ_map);
+    const config_with_roots = try cfg.readConfigWithRoots(io, arena, ctx.environ_map, ctx.stderrW());
 
     const json_opts: std.json.Stringify.Options = .{
         .emit_null_optional_fields = false,
@@ -825,8 +840,7 @@ fn printEnv(ctx: Ctx, opts: EnvOpts) !void {
     switch (config_display) {
         inline else => |display| {
             const env: Env(display) = .init(config_with_roots, ctx.environ_map);
-            std.json.Stringify.value(env, json_opts, &ctx.stdout.interface) catch
-                return ctx.stdout.err.?;
+            std.json.Stringify.value(env, json_opts, ctx.stdoutW()) catch return ctx.stdoutErr();
         },
     }
     try ctx.stdout.flush();
@@ -885,7 +899,7 @@ fn editConfig(ctx: Ctx, opts: EditOpts) !void {
     try writeFileIfNotExists(io, config_dir, cfg.config_filename, "{}");
     try writeFileIfNotExists(io, config_dir, cfg.roots_filename, "[]");
 
-    const config = try cfg.readConfigFromDir(io, arena, config_dir);
+    const config = try cfg.readConfigFromDir(io, arena, config_dir, ctx.stderrW());
 
     const editor = opts.editor orelse
         getCsEditor(ctx.environ_map) orelse
@@ -913,10 +927,11 @@ fn editConfig(ctx: Ctx, opts: EditOpts) !void {
     const term = try proc.wait(io);
     if (term.success()) return;
 
-    ctx.stderr.interface.print("bad termination while editing: {s} ", .{editor}) catch
-        return ctx.stderr.err.?;
-    term.format(&ctx.stderr.interface) catch return ctx.stderr.err.?;
-    ctx.stderr.interface.writeByte('\n') catch return ctx.stderr.err.?;
+    const stderr = ctx.stderrW();
+    stderr.print("bad termination while editing: {s} ", .{editor}) catch
+        return ctx.stderrErr();
+    term.format(stderr) catch return ctx.stderrErr();
+    stderr.writeByte('\n') catch return ctx.stderrErr();
     try ctx.stderr.flush();
 }
 
@@ -965,7 +980,10 @@ fn addRoots(ctx: Ctx, config_dir: Io.Dir, paths: []const []const u8, clear: bool
 
     if (paths.len == 0) try ctx.exit("must provide paths to add", .{});
 
-    const roots = if (clear) &.{} else try cfg.readRootsFromDir(io, arena, config_dir);
+    const roots = switch (clear) {
+        true => &.{},
+        false => try cfg.readRootsFromDir(io, arena, config_dir, ctx.stderrW()),
+    };
 
     const cwd = try process.currentPathAlloc(io, arena);
     var roots_set: StringSet = try .init(arena, roots, &.{});
@@ -997,7 +1015,7 @@ fn removeRoots(ctx: Ctx, config_dir: Io.Dir, paths: []const []const u8, clear: b
 
     if (paths.len == 0) try ctx.exit("must provide paths to remove", .{});
 
-    const roots = try cfg.readRootsFromDir(io, arena, config_dir);
+    const roots = try cfg.readRootsFromDir(io, arena, config_dir, ctx.stderrW());
 
     const cwd = try process.currentPathAlloc(io, arena);
     var roots_set: StringSet = try .init(arena, roots, &.{});
@@ -1033,7 +1051,7 @@ fn handleShell(ctx: Ctx, opts: ShellOpts) !void {
         .fish => @embedFile("shell-integration/shell.fish"),
     };
 
-    ctx.stdout.interface.writeAll(data) catch return ctx.stdout.err.?;
+    ctx.stdoutW().writeAll(data) catch return ctx.stdoutErr();
     try ctx.stdout.flush();
 }
 

@@ -104,8 +104,12 @@ pub fn configDirPath(gpa: Allocator, environ_map: *const EnvironMap) ![]const u8
     return try Io.Dir.path.join(gpa, &.{ home, ".config", appname });
 }
 
-// TODO - deal with bad json
-pub fn readConfigWithRoots(io: Io, arena: Allocator, environ_map: *const EnvironMap) !ConfigWithRoots {
+pub fn readConfigWithRoots(
+    io: Io,
+    arena: Allocator,
+    environ_map: *const EnvironMap,
+    reporter: *Io.Writer,
+) !ConfigWithRoots {
     const cfg_path = try configDirPath(arena, environ_map);
     var cfg_dir = Io.Dir.cwd().openDir(io, cfg_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{ .path = cfg_path },
@@ -113,8 +117,8 @@ pub fn readConfigWithRoots(io: Io, arena: Allocator, environ_map: *const Environ
     };
     defer cfg_dir.close(io);
 
-    const config = try parseFile(io, arena, PartialConfig, cfg_dir, config_filename);
-    const roots = try parseFile(io, arena, []const []const u8, cfg_dir, roots_filename);
+    const config = try parseFile(io, arena, PartialConfig, cfg_dir, config_filename, reporter);
+    const roots = try parseFile(io, arena, []const []const u8, cfg_dir, roots_filename, reporter);
 
     return .{
         .path = cfg_path,
@@ -123,20 +127,35 @@ pub fn readConfigWithRoots(io: Io, arena: Allocator, environ_map: *const Environ
     };
 }
 
-pub fn readConfigFromDir(io: Io, arena: Allocator, dir: Io.Dir) !Config {
-    return try parseFile(io, arena, Config, dir, config_filename) orelse .{};
+pub fn readConfigFromDir(io: Io, arena: Allocator, dir: Io.Dir, reporter: *Io.Writer) !Config {
+    return try parseFile(io, arena, Config, dir, config_filename, reporter) orelse .{};
 }
 
-pub fn readRootsFromDir(io: Io, arena: Allocator, dir: Io.Dir) ![]const []const u8 {
-    return try parseFile(io, arena, []const []const u8, dir, roots_filename) orelse &.{};
+pub fn readRootsFromDir(io: Io, arena: Allocator, dir: Io.Dir, reporter: *Io.Writer) ![]const []const u8 {
+    return try parseFile(io, arena, []const []const u8, dir, roots_filename, reporter) orelse &.{};
 }
 
-fn parseFile(io: Io, arena: Allocator, T: type, dir: Io.Dir, filename: []const u8) !?T {
+fn parseFile(
+    io: Io,
+    arena: Allocator,
+    T: type,
+    dir: Io.Dir,
+    filename: []const u8,
+    reporter: *Io.Writer,
+) !?T {
     const data = dir.readFileAlloc(io, filename, arena, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => |e| return e,
     };
-    return try std.json.parseFromSliceLeaky(T, arena, data, .{ .ignore_unknown_fields = true });
+    return std.json.parseFromSliceLeaky(T, arena, data, .{ .ignore_unknown_fields = true }) catch |err|
+        switch (err) {
+            error.OutOfMemory => |e| return e,
+            else => |e| {
+                try reporter.print("invalid json file {q} ({t})\n", .{ filename, e });
+                try reporter.flush();
+                return null;
+            },
+        };
 }
 
 test {

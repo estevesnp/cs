@@ -157,7 +157,6 @@ fn searchDir(ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
     const gpa = ctx.gpa;
     const io = ctx.io;
 
-    // TODO - check if needed for every OS
     try io.checkCancel();
 
     if (depth > ctx.max_depth) return;
