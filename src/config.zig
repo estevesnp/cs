@@ -26,6 +26,11 @@ pub const Env = enum {
     }
 };
 
+pub const SearchStrategy = enum {
+    concurrent,
+    blocking,
+};
+
 pub const Action = enum {
     session,
     window,
@@ -41,6 +46,7 @@ pub const EditMode = enum {
 pub const Config = struct {
     markers: []const []const u8 = walk.default_project_markers,
     max_depth: usize = walk.default_max_depth,
+    strategy: SearchStrategy = if (builtin.single_threaded) .blocking else .concurrent,
     action: Action = .session,
     preview: []const u8 = if (is_windows) "dir {}" else "ls {}",
     edit_mode: EditMode = .config,

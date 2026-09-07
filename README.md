@@ -109,8 +109,18 @@ search:
                               to any project, instantly selects it
 
   flags:
+    -s, --strategy <strat>    strategy for how to search for projects.
+                              concurrent: search for projects and attempt to
+                                          match while also displaying paths
+                                          inside fzf
+                              blocking:   first search for projects and then
+                                          spawn fzf if no match is found
+                              the option can be chosen directly, e.g. --blocking
+                              options: concurrent (default), blocking
+
+
     -a, --action <action>     select action to perform on project selection.
-                              can also choose the action directly, like --print.
+                              the option can be chosen directly, e.g. --print
                               options: session, window, print
 
     -m, --max-depth <depth>   how many directories deep to search for in each
@@ -126,7 +136,7 @@ env:
     -c, --config <display>    select how to display the config. either display
                               all possible options (full), or only the ones that
                               are configured (partial).
-                              can also choose the display directly, like --full.
+                              the option can be chosen directly, e.g. --full
                               options: partial (default), full
 
 

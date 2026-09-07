@@ -13,6 +13,7 @@ const assert = std.debug.assert;
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
+const SearchStrategy = cfg.SearchStrategy;
 const Action = cfg.Action;
 const EditMode = cfg.EditMode;
 
@@ -114,8 +115,18 @@ const usage =
     \\                              to any project, instantly selects it
     \\
     \\  flags:
+    \\    -s, --strategy <strat>    strategy for how to search for projects.
+    \\                              concurrent: search for projects and attempt to
+    \\                                          match while also displaying paths
+    \\                                          inside fzf
+    \\                              blocking:   first search for projects and then
+    \\                                          spawn fzf if no match is found
+    \\                              the option can be chosen directly, e.g. --blocking
+    \\                              options: concurrent (default), blocking
+    \\
+    \\
     \\    -a, --action <action>     select action to perform on project selection.
-    \\                              can also choose the action directly, like --print.
+    \\                              the option can be chosen directly, e.g. --print
     \\                              options: session, window, print
     \\
     \\    -m, --max-depth <depth>   how many directories deep to search for in each
@@ -131,7 +142,7 @@ const usage =
     \\    -c, --config <display>    select how to display the config. either display
     \\                              all possible options (full), or only the ones that
     \\                              are configured (partial).
-    \\                              can also choose the display directly, like --full.
+    \\                              the option can be chosen directly, e.g. --full
     \\                              options: partial (default), full
     \\
     \\
@@ -197,14 +208,12 @@ const SearchOpts = struct {
     query: ?[]const u8,
     preview: ?[]const u8,
     max_depth: ?usize,
+    strategy: ?SearchStrategy,
     action: ?Action,
-    // TODO - quiet: don't print diagnostics from walk
-    // TODO - strategy: blocking (1st walk, then fzf), concurrent (race between fzf and walk)
     // TODO - stop iterating on marker match?
     // TODO - roots?
     // TODO - markers?
     // TODO - custom action to run with sh -c <templated string>, with option to replace
-    // TODO - tmux script?
 };
 
 const ConfigDisplay = enum { full, partial };
@@ -266,6 +275,7 @@ fn parseSearch(it: *Iter, w: *Io.Writer) CmdError!SearchOpts {
         .query = null,
         .preview = null,
         .max_depth = null,
+        .strategy = null,
         .action = null,
     };
 
@@ -277,6 +287,12 @@ fn parseSearch(it: *Iter, w: *Io.Writer) CmdError!SearchOpts {
                 continue;
             }
             if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
+
+            if (try getNamedArg(w, it, arg, &.{ "--strategy", "-s" })) |named| {
+                opts.strategy = std.meta.stringToEnum(SearchStrategy, named) orelse
+                    return usageError(w, "invalid strategy value: {q}", .{named});
+                continue;
+            }
 
             if (try getNamedArg(w, it, arg, &.{ "--action", "-a" })) |named| {
                 opts.action = std.meta.stringToEnum(Action, named) orelse
@@ -297,6 +313,10 @@ fn parseSearch(it: *Iter, w: *Io.Writer) CmdError!SearchOpts {
 
             if (mem.startsWith(u8, arg, "-")) {
                 if (mem.startsWith(u8, arg, "--")) {
+                    if (std.meta.stringToEnum(SearchStrategy, arg[2..])) |strategy| {
+                        opts.strategy = strategy;
+                        continue;
+                    }
                     if (std.meta.stringToEnum(Action, arg[2..])) |action| {
                         opts.action = action;
                         continue;
@@ -506,47 +526,32 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const preview = opts.preview orelse config.preview;
     const query = opts.query orelse "";
 
-    var fzf_proc = spawnFzf(io, preview, query) catch |err| switch (err) {
-        error.FileNotFound => try ctx.exit("fzf binary not found in path", .{}),
-        else => |e| return e,
-    };
-
-    var fzf_w_buf: [64]u8 = undefined;
-    var fzf_writer = fzf_proc.stdin.?.writerStreaming(io, &fzf_w_buf);
-    fzf_proc.stdin = null;
-
-    var fzf_r_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined;
-    var fzf_reader = fzf_proc.stdout.?.readerStreaming(io, &fzf_r_buf);
-
-    // needed so that we don't print to screen while fzf is running
-    var walk_reporter: Io.Writer.Allocating = .init(arena);
-
     const walk_opts: WalkOpts = .{
-        .reporter = &walk_reporter.writer,
         .query = query,
         .roots = roots,
         .markers = config.markers,
         .max_depth = opts.max_depth orelse config.max_depth,
     };
-    const fzf_proc_rw: FzfProc = .{
-        .proc = &fzf_proc,
-        .stdin = &fzf_writer,
-        .stdout = &fzf_reader,
-    };
-    const selection_opt = searchProject(ctx, walk_opts, fzf_proc_rw) catch |err| {
-        try ctx.report(walk_reporter.written());
-        switch (err) {
-            error.NoProjectsFound => try ctx.exit("no projects found", .{}),
-            else => |e| return e,
-        }
+
+    // needed for concurrent so that we don't print to screen while fzf is running
+    var walk_reporter: Io.Writer.Allocating = .init(arena);
+
+    const strategy = opts.strategy orelse config.strategy;
+    const selection_err_union = switch (strategy) {
+        .concurrent => searchConcurrent(ctx, walk_opts, preview, &walk_reporter.writer),
+        .blocking => searchBlocking(ctx, walk_opts, preview),
     };
 
     try ctx.report(walk_reporter.written());
 
-    const selection = selection_opt orelse return;
+    const selection = selection_err_union catch |err|
+        switch (err) {
+            error.NoProjectsFound => try ctx.exit("no projects found", .{}),
+            error.FzfNotFound => try ctx.exit("fzf binary not found in path", .{}),
+            else => |e| return e,
+        } orelse return;
 
     const action = opts.action orelse config.action;
-
     switch (action) {
         .print => {
             ctx.stdout.interface.writeAll(selection) catch return ctx.stdout.err.?;
@@ -572,15 +577,38 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     }
 }
 
-const SearchError = WalkError || FzfExtractError || Io.ConcurrentError;
+fn searchBlocking(ctx: Ctx, opts: WalkOpts, preview: []const u8) !?[]const u8 {
+    const arena = ctx.arena;
+    const io = ctx.io;
+
+    const projects = try searchProjects(io, arena, opts, &ctx.stderr.interface, null);
+    if (matchProject(opts.query, projects)) |match| return match;
+
+    var fzf_proc: FzfProc = undefined;
+    try fzf_proc.init(io, preview, opts.query);
+
+    for (projects) |project| {
+        fzf_proc.stdin.interface.writeAll(project) catch return fzf_proc.stdin.err.?;
+        fzf_proc.stdin.interface.writeByte('\n') catch return fzf_proc.stdin.err.?;
+    }
+    try fzf_proc.stdin.flush();
+    fzf_proc.stdin.file.close(io);
+
+    return extractFzfSelection(io, arena, &fzf_proc.proc, &fzf_proc.stdout);
+}
+
+const SearchError = WalkError || FzfSpawnError || FzfExtractError || Io.ConcurrentError;
 
 fn ReturnType(comptime function: anytype) type {
     return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
 }
 
-fn searchProject(ctx: Ctx, walk_opts: WalkOpts, fzf_proc: FzfProc) SearchError!?[]const u8 {
+fn searchConcurrent(ctx: Ctx, opts: WalkOpts, preview: []const u8, reporter: *Io.Writer) SearchError!?[]const u8 {
     const arena = ctx.arena;
     const io = ctx.io;
+
+    var fzf_proc: FzfProc = undefined;
+    try fzf_proc.init(io, preview, opts.query);
 
     var queue_buf: [10][]const u8 = undefined;
     var project_queue: Io.Queue([]const u8) = .init(&queue_buf);
@@ -594,11 +622,11 @@ fn searchProject(ctx: Ctx, walk_opts: WalkOpts, fzf_proc: FzfProc) SearchError!?
     var select: Io.Select(U) = .init(io, &select_buf);
     defer select.cancelDiscard();
 
-    var feed_future = try io.concurrent(feedToFzf, .{ io, &project_queue, fzf_proc.stdin });
+    var feed_future = try io.concurrent(feedToFzf, .{ io, &project_queue, &fzf_proc.stdin });
     defer feed_future.cancel(io);
 
-    try select.concurrent(.walk, walkAndMatch, .{ io, arena, &project_queue, walk_opts });
-    try select.concurrent(.extract, extractFzfSelection, .{ io, fzf_proc.proc, fzf_proc.stdout });
+    try select.concurrent(.walk, walkAndMatch, .{ io, arena, opts, reporter, &project_queue });
+    try select.concurrent(.extract, extractFzfSelection, .{ io, arena, &fzf_proc.proc, &fzf_proc.stdout });
 
     switch (try select.await()) {
         .walk => |walk_match| {
@@ -613,7 +641,6 @@ fn searchProject(ctx: Ctx, walk_opts: WalkOpts, fzf_proc: FzfProc) SearchError!?
 }
 
 const WalkOpts = struct {
-    reporter: *Io.Writer,
     query: []const u8,
     roots: []const []const u8,
     markers: []const []const u8,
@@ -625,22 +652,33 @@ const WalkError = error{NoProjectsFound} || walk.SearchError;
 fn walkAndMatch(
     io: Io,
     arena: Allocator,
-    project_queue: *Io.Queue([]const u8),
     opts: WalkOpts,
+    reporter: *Io.Writer,
+    project_queue: ?*Io.Queue([]const u8),
 ) WalkError!?[]const u8 {
-    const project_set = try walk.searchProjects(arena, io, opts.roots, .{
-        .queue = project_queue,
-        .reporter = opts.reporter,
-        .project_markers = opts.markers,
-        .max_depth = opts.max_depth,
-    });
-    const projects = project_set.keys();
+    const projects = try searchProjects(io, arena, opts, reporter, project_queue);
 
     if (projects.len == 0) {
         return error.NoProjectsFound;
     }
 
     return matchProject(opts.query, projects);
+}
+
+fn searchProjects(
+    io: Io,
+    arena: Allocator,
+    opts: WalkOpts,
+    reporter: *Io.Writer,
+    project_queue: ?*Io.Queue([]const u8),
+) walk.SearchError![]const []const u8 {
+    const project_set = try walk.searchProjects(arena, io, opts.roots, .{
+        .reporter = reporter,
+        .queue = project_queue,
+        .project_markers = opts.markers,
+        .max_depth = opts.max_depth,
+    });
+    return project_set.keys();
 }
 
 fn matchProject(query: []const u8, project_paths: []const []const u8) ?[]const u8 {
@@ -686,24 +724,31 @@ test matchProject {
 }
 
 const FzfProc = struct {
-    proc: *process.Child,
-    stdin: *Io.File.Writer,
-    stdout: *Io.File.Reader,
+    proc: process.Child,
+
+    stdin: Io.File.Writer,
+    stdout: Io.File.Reader,
+
+    stdin_buf: [64]u8 = undefined,
+    stdout_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined,
+
+    fn init(self: *FzfProc, io: Io, preview: []const u8, query: []const u8) FzfSpawnError!void {
+        const proc = try spawnFzf(io, preview, query);
+
+        self.* = .{
+            .proc = proc,
+            .stdin = proc.stdin.?.writerStreaming(io, &self.stdin_buf),
+            .stdout = proc.stdout.?.readerStreaming(io, &self.stdout_buf),
+        };
+
+        self.proc.stdin = null;
+    }
 };
 
-fn feedToFzf(io: Io, project_queue: *Io.Queue([]const u8), fzf_stdin: *Io.File.Writer) void {
-    defer fzf_stdin.file.close(io);
-    while (true) {
-        const project = project_queue.getOne(io) catch return;
-        // if write fails, it's likely due to fzf exiting early
-        fzf_stdin.interface.writeAll(project) catch return;
-        fzf_stdin.interface.writeByte('\n') catch return;
-        fzf_stdin.flush() catch return;
-    }
-}
+const FzfSpawnError = error{FzfNotFound} || process.SpawnError;
 
 fn spawnFzf(io: Io, preview: []const u8, query: []const u8) !process.Child {
-    return try process.spawn(io, .{
+    return process.spawn(io, .{
         .argv = &.{
             "fzf",
             "--header=choose a repo",
@@ -717,17 +762,32 @@ fn spawnFzf(io: Io, preview: []const u8, query: []const u8) !process.Child {
         },
         .stdin = .pipe,
         .stdout = .pipe,
-    });
+    }) catch |err| switch (err) {
+        error.FileNotFound => return error.FzfNotFound,
+        else => |e| return e,
+    };
+}
+
+fn feedToFzf(io: Io, project_queue: *Io.Queue([]const u8), fzf_stdin: *Io.File.Writer) void {
+    defer fzf_stdin.file.close(io);
+    while (true) {
+        const project = project_queue.getOne(io) catch return;
+        // if write fails, it's likely due to fzf exiting early
+        fzf_stdin.interface.writeAll(project) catch return;
+        fzf_stdin.interface.writeByte('\n') catch return;
+        fzf_stdin.flush() catch return;
+    }
 }
 
 const fzf_no_match_sc: u8 = 1;
 const fzf_interrupt_sc: u8 = 130;
 
 const FzfExtractError = error{FzfBadTermination} ||
-    Io.File.Reader.Error || Io.Reader.DelimiterError || process.Child.WaitError;
+    Allocator.Error || Io.File.Reader.Error || Io.Reader.DelimiterError || process.Child.WaitError;
 
 fn extractFzfSelection(
     io: Io,
+    gpa: Allocator,
     fzf_proc: *process.Child,
     fzf_stdout: *Io.File.Reader,
 ) FzfExtractError!?[]const u8 {
@@ -741,7 +801,7 @@ fn extractFzfSelection(
 
     return switch (try fzf_proc.wait(io)) {
         .exited => |code| switch (code) {
-            0 => selection,
+            0 => try gpa.dupe(u8, selection orelse return null),
             fzf_no_match_sc, fzf_interrupt_sc => null,
             else => error.FzfBadTermination,
         },
