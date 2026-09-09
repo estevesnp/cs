@@ -24,6 +24,95 @@ zig build -Doptimize=ReleaseSafe
 3. add executable to PATH. default build path is `path/to/repo/zig-out/bin/cs`
    - build path can be overwritten by using the `-p` flag, like `zig build -Doptimize=ReleaseSafe -p ~/.local/bin`
 
+## cswalk
+
+the main search functionality is also exposed as a lib, both through zig and C ffi
+
+### zig lib
+
+first fetch the dependency:
+
+```sh
+zig fetch --save git+https://github.com/estevesnp/cs
+```
+
+then in your build.zig:
+
+```zig
+const cs = b.dependency("cs", .{});
+exe.root_module.addImport("cswalk", cs.module("cswalk"));
+```
+
+example usage:
+
+```zig
+const std = @import("std");
+const Io = std.Io;
+const cs = @import("cswalk");
+
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const gpa = init.gpa;
+    var stderr = Io.File.stderr().writer(io, &.{});
+
+    const roots = &.{ "/home/estevesnp/work", "/home/estevesnp/pers" };
+    const opts: cs.SearchOpts = .{
+        .reporter = &stderr.interface,
+        .max_depth = 10,
+        .project_markers = &.{ ".git", ".csm" },
+    };
+
+    var projects = try cs.searchProjects(gpa, io, roots, opts);
+    defer cs.freeProjects(gpa, &projects);
+
+    std.debug.print("found projects:", .{});
+    for (projects.keys()) |project| {
+        std.debug.print("- {s}\n", .{project});
+    }
+}
+
+```
+
+### c lib
+
+to build the lib (output is in zig-out/lib):
+
+```sh
+zig build -Dlibcswalk -Doptimize=ReleaseSafe
+```
+
+the header file for the lib is [cswalk.h](./src/walk/ffi/include/cswalk.h)
+
+example usage:
+
+```c
+#include "cswalk.h"
+#include <stdio.h>
+
+int main() {
+    char *roots[] = {"/home/estevesnp/work", "/home/estevesnp/pers"};
+    uint32_t count = sizeof(roots) / sizeof(*roots);
+
+    CsSearchOpts opts = {
+        .max_depth = 10,
+        .enable_logging = true,
+    };
+
+    CsSearchResult result = cs_search_projects(roots, count, opts);
+    if (!result.ok) {
+        return 1;
+    }
+
+    printf("found projects:\n");
+    for (int i = 0; i < result.count; i++) {
+        printf("- %s\n", result.paths[i]);
+    }
+
+    cs_free_projects(result.paths, result.count);
+    return 0;
+}
+```
+
 ## config
 
 the config dir path is `$XDG_CONFIG_HOME/cs` in linux/mac (with a fallback to `$HOME/.config/cs`),
