@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const build_zig_zon = @import("build.zig.zon");
+const cs_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch
+    @compileError("invalid version in build.zig.zon");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -13,7 +14,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     const options = b.addOptions();
-    options.addOption([]const u8, "cs_version", getCsVersion(b));
+    options.addOption(std.SemanticVersion, "cs_version", getVersion(b));
     mod.addOptions("options", options);
 
     const exe = b.addExecutable(.{
@@ -79,19 +80,39 @@ pub fn build(b: *std.Build) !void {
     check_step.dependOn(&exe_tests.step);
 }
 
-fn getCsVersion(b: *std.Build) []const u8 {
-    const tagged_version = b.option(bool, "tagged-version", "use tagged version") orelse false;
-    if (tagged_version) return build_zig_zon.version;
+fn getVersion(b: *std.Build) std.SemanticVersion {
+    const version_string = b.option([]const u8, "version-string", "override version. must be a semantic version");
+    if (version_string) |semver_string| {
+        return std.SemanticVersion.parse(semver_string) catch |err| {
+            std.debug.panic("expected -Dversion-string={s} to be a semantic version: {}", .{ semver_string, err });
+        };
+    }
+
+    const default_version: std.SemanticVersion = .{
+        .major = cs_version.major,
+        .minor = cs_version.minor,
+        .patch = cs_version.patch,
+        .pre = "dev",
+    };
+
+    if (!b.isRoot()) {
+        return default_version;
+    }
+
+    b.dependOnFileContents(b.path(".git/logs/HEAD"));
 
     const res = b.runFallible(&.{ "git", "rev-parse", "--short", "HEAD" }, .{});
-    switch (res) {
-        .success => |hash| {
-            const trimmed = std.mem.trimEnd(u8, hash, "\r\n");
-            return b.fmt("{s}-dev.{s}", .{ build_zig_zon.version, trimmed });
-        },
-        else => {
-            std.log.err("error fetching git hash ({t}). defaulting to version from build.zig.zon", .{res});
-            return build_zig_zon.version;
-        },
+    if (res != .success) {
+        std.log.err("error fetching git hash ({t}). defaulting to version from build.zig.zon", .{res});
+        return default_version;
     }
+
+    const hash = std.mem.trimEnd(u8, res.success, "\r\n");
+    return .{
+        .major = cs_version.major,
+        .minor = cs_version.minor,
+        .patch = cs_version.patch,
+        .pre = "dev",
+        .build = hash,
+    };
 }

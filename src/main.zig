@@ -36,7 +36,7 @@ pub fn main(init: process.Init) !void {
     };
 
     switch (cmd) {
-        .version => try Io.File.stdout().writeStreamingAll(ctx.io, options.cs_version),
+        .version => try printVersion(ctx),
         .search => |opts| try search(ctx, opts),
         .env => |opts| try printEnv(ctx, opts),
         .edit => |opts| try editConfig(ctx, opts),
@@ -538,6 +538,11 @@ const Iter = struct {
         if (self.idx > 0) self.idx -= 1;
     }
 };
+
+fn printVersion(ctx: Ctx) !void {
+    options.cs_version.format(ctx.stdoutW()) catch return ctx.stdoutErr();
+    try ctx.stdout.flush();
+}
 
 fn search(ctx: Ctx, opts: SearchOpts) !void {
     const arena = ctx.arena;
