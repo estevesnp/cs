@@ -45,13 +45,12 @@ end
 function M.search_projects(roots)
   roots = roots or {}
   if #roots == 0 then
-    -- TODO - get default roots
     return {}
   end
 
   local lib = get_libcswalk()
   if not lib then
-    -- TODO - what do
+    log.error("unable to load libcswalk")
     return {}
   end
 

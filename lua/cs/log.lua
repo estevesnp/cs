@@ -16,6 +16,12 @@ end
 
 ---@param fmt string
 ---@param ... any
+function M.warn(fmt, ...)
+  log(vim.log.levels.WARN, fmt, ...)
+end
+
+---@param fmt string
+---@param ... any
 function M.error(fmt, ...)
   log(vim.log.levels.ERROR, fmt, ...)
 end
