@@ -46,7 +46,6 @@ local default_opts = {
   preview = jit.os == "Windows" and "dir {}" or "ls {}",
   roots = {},
   action = "open",
-  picker = "fzf-lua",
 }
 
 ---@return cs.ResolvedSearchOpts
@@ -63,7 +62,6 @@ local function get_env_opts()
       preview = (env.config and env.config.preview) or default_opts.preview,
       roots = env.roots or default_opts.roots,
       action = default_opts.action,
-      picker = default_opts.picker,
     }
   end
 
@@ -74,28 +72,15 @@ end
 ---@field roots string[]
 ---@field preview string
 ---@field action cs.Action
----@field picker cs.Picker
 
 ---@param opts cs.SearchOpts|nil
 ---@return cs.ResolvedSearchOpts
 local function resolve_opts(opts)
+  local env_opts = get_env_opts()
   if not opts then
-    return get_env_opts()
+    return env_opts
   end
-
-  if opts.preview and opts.roots then
-    return {
-      preview = opts.preview,
-      roots = opts.roots,
-    }
-  end
-
-  local resolved = get_env_opts()
-
-  resolved.preview = opts.preview or resolved.preview
-  resolved.roots = opts.roots or resolved.roots
-
-  return resolved
+  return vim.tbl_extend("force", env_opts, opts)
 end
 
 ---@type table<cs.Action, fun(selected: string[])>
@@ -115,13 +100,11 @@ local action_cb_map = {
 }
 
 ---@alias cs.Action "cd" | "tab" | "open"
----@alias cs.Picker "fzf-lua"
 
 ---@class cs.SearchOpts
 ---@field roots string[]|nil
 ---@field preview string|nil
 ---@field action cs.Action|nil
----@field picker cs.Picker|nil
 
 ---search projects
 ---@param search_opts cs.SearchOpts|nil
@@ -153,7 +136,7 @@ function M.search_projects(search_opts)
   })
 end
 
----search and return roots
+---search and return projects
 ---@param roots string[]|nil
 function M.list_projects(roots)
   roots = roots or {}
@@ -173,11 +156,7 @@ function M.setup(search_opts)
   if not search_opts then
     return
   end
-
-  default_opts.preview = search_opts.preview or default_opts.preview
-  default_opts.roots = search_opts.roots or default_opts.roots
-  default_opts.action = search_opts.action or default_opts.action
-  default_opts.picker = search_opts.picker or default_opts.picker
+  default_opts = vim.tbl_extend("force", default_opts, search_opts)
 end
 
 return M
