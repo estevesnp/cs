@@ -113,6 +113,63 @@ int main() {
 }
 ```
 
+## neovim plugin
+
+a neovim plugin to search and switch between projects is also available, by
+taking advantage of the `cswalk` lib. you will need `zig` in your path in order
+to compile the lib when first loading the plugin.
+
+example configuration:
+
+```lua
+vim.api.nvim_create_autocmd("PackChanged", {
+  callback = function(ev)
+    local name, kind = ev.data.spec.name, ev.data.kind
+    if name == "cs" and (kind == "install" or kind == "update") then
+      if not ev.data.active then
+        vim.cmd.packadd("cs")
+      end
+      require("cs.lib.build").build_cswalk(true)
+    end
+  end,
+})
+
+vim.pack.add({
+  "https://github.com/ibhagwan/fzf-lua", -- needed for picker
+  "https://github.com/estevesnp/cs",
+})
+
+-- example keybinds
+vim.keymap.set("n", "<leader>cs", function()
+  require("cs").search_projects()
+end, { desc = "open project" })
+
+vim.keymap.set("n", "<leader>cv", function()
+  require("cs").search_projects({ action = "vsplit" })
+end, { desc = "open project in new vsplit" })
+
+vim.keymap.set("n", "<leader>ct", function()
+  require("cs").search_projects({ action = "tab" })
+end, { desc = "open project in new tab" })
+```
+
+if no options are passed in, we first attempt to fetch the config from the
+`cs env --full` command, with a fallback to a set of default options.
+
+these default options can be overwritten via `require("cs").setup`.
+
+NOTE: these are the default options. if you don't want to change them, there is
+no need to call `require("cs").setup`.
+
+```lua
+require("cs").setup({
+  preview = jit.os == "Windows" and "dir {}" or "ls {}",
+  roots = {},
+  -- only option not fetched from `cs env --full`
+  action = "open",
+})
+```
+
 ## config
 
 the config dir path is `$XDG_CONFIG_HOME/cs` in linux/mac (with a fallback to `$HOME/.config/cs`),
