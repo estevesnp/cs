@@ -65,7 +65,7 @@ pub fn main(init: std.process.Init) !void {
     var projects = try cs.searchProjects(gpa, io, roots, opts);
     defer cs.freeProjects(gpa, &projects);
 
-    std.debug.print("found projects:", .{});
+    std.debug.print("found projects:\n", .{});
     for (projects.keys()) |project| {
         std.debug.print("- {s}\n", .{project});
     }
