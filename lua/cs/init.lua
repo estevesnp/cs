@@ -88,18 +88,23 @@ local action_cb_map = {
   open = function(selected)
     vim.cmd("e " .. selected[1])
   end,
-  cd = function(selected)
-    vim.cmd("cd " .. selected[1])
+  vsplit = function(selected)
+    vim.cmd("vsplit | wincmd l")
     vim.cmd("e " .. selected[1])
+    vim.cmd("bcd " .. selected[1])
   end,
   tab = function(selected)
     vim.cmd("tabnew " .. selected[1])
-    vim.cmd("tcd " .. selected[1])
     vim.cmd("e " .. selected[1])
+    vim.cmd("tcd " .. selected[1])
+  end,
+  cd = function(selected)
+    vim.cmd("e " .. selected[1])
+    vim.cmd("cd " .. selected[1])
   end,
 }
 
----@alias cs.Action "cd" | "tab" | "open"
+---@alias cs.Action "open" | "vsplit" | "tab" | "cd"
 
 ---@class cs.SearchOpts
 ---@field roots string[]|nil
