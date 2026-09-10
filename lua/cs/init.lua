@@ -86,21 +86,21 @@ end
 ---@type table<cs.Action, fun(selected: string[])>
 local action_cb_map = {
   open = function(selected)
-    vim.cmd("e " .. selected[1])
+    vim.cmd.edit(selected[1])
   end,
   vsplit = function(selected)
     vim.cmd("vsplit | wincmd l")
-    vim.cmd("e " .. selected[1])
-    vim.cmd("bcd " .. selected[1])
+    vim.cmd.edit(selected[1])
+    vim.cmd.bcd(selected[1])
   end,
   tab = function(selected)
-    vim.cmd("tabnew " .. selected[1])
-    vim.cmd("e " .. selected[1])
-    vim.cmd("tcd " .. selected[1])
+    vim.cmd.tabnew(selected[1])
+    vim.cmd.edit(selected[1])
+    vim.cmd.tcd(selected[1])
   end,
   cd = function(selected)
-    vim.cmd("e " .. selected[1])
-    vim.cmd("cd " .. selected[1])
+    vim.cmd.edit(selected[1])
+    vim.cmd.cd(selected[1])
   end,
 }
 
