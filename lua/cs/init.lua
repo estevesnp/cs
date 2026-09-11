@@ -12,6 +12,7 @@ local cache = {
 ---@field roots string[]
 
 ---@class cs.Config
+---@field markers string[]
 ---@field preview string
 
 ---@return cs.Env|nil
@@ -45,6 +46,7 @@ end
 local default_opts = {
   preview = jit.os == "Windows" and "dir {}" or "ls {}",
   roots = {},
+  markers = { ".git", ".jj" },
   action = "open",
   prompt = "choose a project> ",
 }
@@ -62,6 +64,7 @@ local function get_env_opts()
     cache.env_opts = {
       preview = (env.config and env.config.preview) or default_opts.preview,
       roots = env.roots or default_opts.roots,
+      markers = (env.config and env.config.markers) or default_opts.markers,
       action = default_opts.action,
       prompt = default_opts.prompt,
     }
@@ -103,12 +106,14 @@ local action_cb_map = {
 
 ---@class cs.ResolvedSearchOpts
 ---@field roots string[]
+---@field markers string[]
 ---@field preview string
 ---@field action cs.Action
 ---@field prompt string
 
 ---@class cs.SearchOpts
 ---@field roots string[]|nil
+---@field markers string[]|nil
 ---@field preview string|nil
 ---@field action cs.Action|nil
 ---@field prompt string|nil
@@ -160,7 +165,7 @@ function M.list_projects(roots)
   return require("cs.lib").search_projects(roots)
 end
 
----set default opts
+---set default opts. opts from `cs env --full` still override these.
 ---@param search_opts cs.SearchOpts|nil
 function M.setup(search_opts)
   if not search_opts then

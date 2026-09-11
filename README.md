@@ -165,7 +165,9 @@ no need to call `require("cs").setup`.
 require("cs").setup({
   preview = jit.os == "Windows" and "dir {}" or "ls {}",
   roots = {},
-  -- only option not fetched from `cs env --full`
+  markers = { ".git", ".jj" },
+
+  -- options not fetched from `cs env --full`
   action = "open",
   prompt = "choose a project> ",
 })

@@ -39,11 +39,26 @@ local function get_libcswalk()
   return cache.lib
 end
 
+---@param arr string[]
+---@return table
+local function to_c_string_arr(arr)
+  local c_arr = ffi.new("const char *[?]", #arr)
+
+  for i, str in ipairs(arr) do
+    c_arr[i - 1] = str
+  end
+
+  return c_arr
+end
+
 ---find projects for roots
 ---@param roots string[]|nil
+---@param markers string[]|nil
 ---@return string[]
-function M.search_projects(roots)
+function M.search_projects(roots, markers)
   roots = roots or {}
+  markers = markers or {}
+
   if #roots == 0 then
     return {}
   end
@@ -54,17 +69,14 @@ function M.search_projects(roots)
     return {}
   end
 
-  local root_paths = ffi.new("const char *[?]", #roots)
-
-  for i, path in ipairs(roots) do
-    root_paths[i - 1] = path
-  end
-
   local opts = ffi.new("CsSearchOpts")
   opts.enable_logging = true
+  opts.project_markers = to_c_string_arr(markers)
+  opts.markers_count = #markers
 
-  local result = lib.cs_search_projects(root_paths, #roots, opts)
+  local result = lib.cs_search_projects(to_c_string_arr(roots), #roots, opts)
   if not result.ok then
+    lib.cs_free_projects(result.handle)
     return {}
   end
 
