@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 
+const log = std.log.scoped(.cs);
+
 const walk = @import("walk");
 
 const CStringArray = [*]const [*:0]const u8;
@@ -35,13 +37,19 @@ export fn cs_search_projects(root_paths: ?CStringArray, root_count: u32, opts: C
     var arena_state: std.heap.ArenaAllocator = .init(allocator);
     const arena = arena_state.allocator();
 
-    var handle = arena.create(CsHandle) catch return failedResult(null);
+    var handle = arena.create(CsHandle) catch |err| {
+        log.err("error creating handle: {t}", .{err});
+        return failedResult(null);
+    };
     handle.arena = arena_state;
 
     var threaded: Io.Threaded = .init_single_threaded;
     const io = threaded.io();
 
-    return searchProjects(handle, io, root_paths, root_count, opts) catch failedResult(handle);
+    return searchProjects(handle, io, root_paths, root_count, opts) catch |err| {
+        log.err("error searching for projects: {t}", .{err});
+        return failedResult(handle);
+    };
 }
 
 export fn cs_free_projects(handle: ?*CsHandle) void {
