@@ -74,7 +74,7 @@ function M.search_projects(roots)
     projects[i + 1] = ffi.string(result.paths[i])
   end
 
-  lib.cs_free_projects(result.paths, result.count)
+  lib.cs_free_projects(result.handle)
 
   return projects
 end

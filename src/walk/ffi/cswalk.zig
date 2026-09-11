@@ -7,6 +7,7 @@ const walk = @import("walk");
 const CStringArray = [*]const [*:0]const u8;
 
 const CsSearchResult = extern struct {
+    handle: ?*CsHandle,
     paths: CStringArray,
     count: u32,
     ok: bool,
@@ -19,6 +20,10 @@ const CsSearchOpts = extern struct {
     enable_logging: bool,
 };
 
+const CsHandle = struct {
+    arena: std.heap.ArenaAllocator,
+};
+
 const allocator = if (builtin.link_libc)
     std.heap.c_allocator
 else if (!builtin.single_threaded)
@@ -27,62 +32,66 @@ else
     std.heap.page_allocator;
 
 export fn cs_search_projects(root_paths: ?CStringArray, root_count: u32, opts: CsSearchOpts) CsSearchResult {
-    const gpa = allocator;
+    var arena_state: std.heap.ArenaAllocator = .init(allocator);
+    const arena = arena_state.allocator();
+
+    var handle = arena.create(CsHandle) catch return failedResult(null);
+    handle.arena = arena_state;
+
     var threaded: Io.Threaded = .init_single_threaded;
     const io = threaded.io();
 
-    return searchProjects(gpa, io, root_paths, root_count, opts) catch .{
+    return searchProjects(handle, io, root_paths, root_count, opts) catch failedResult(handle);
+}
+
+export fn cs_free_projects(handle: ?*CsHandle) void {
+    if (handle) |h| h.arena.deinit();
+}
+
+fn failedResult(handle: ?*CsHandle) CsSearchResult {
+    return .{
+        .handle = handle,
         .count = 0,
         .paths = &.{},
         .ok = false,
     };
 }
 
-export fn cs_free_projects(projects: ?CStringArray, count: u32) void {
-    if (projects == null or count == 0) return;
-    const gpa = allocator;
-
-    const allocated_projects = projects.?[0..count];
-    for (allocated_projects) |proj| gpa.free(std.mem.sliceTo(proj, 0));
-    gpa.free(allocated_projects);
-}
-
 fn searchProjects(
-    gpa: std.mem.Allocator,
+    handle: *CsHandle,
     io: Io,
     root_paths: ?CStringArray,
     root_count: u32,
     opts: CsSearchOpts,
 ) !CsSearchResult {
-    const root_paths_bounded = try getBoundedCStringArray(gpa, root_paths, root_count);
-    defer gpa.free(root_paths_bounded);
+    const arena = handle.arena.allocator();
 
-    const project_markers = try getBoundedCStringArray(gpa, opts.project_markers, opts.markers_count);
-    defer gpa.free(project_markers);
+    const root_paths_bounded = try getBoundedCStringArray(arena, root_paths, root_count);
+    const project_markers = try getBoundedCStringArray(arena, opts.project_markers, opts.markers_count);
 
-    var project_set = try walk.searchProjects(gpa, io, root_paths_bounded, .{
+    var project_set = try walk.searchProjects(arena, io, root_paths_bounded, .{
         .max_depth = opts.max_depth,
         .project_markers = project_markers,
         .reporter = if (opts.enable_logging) .stderr else .none,
     });
-    defer project_set.deinit(gpa);
 
     const projects = project_set.keys();
 
-    const paths = try gpa.alloc([*:0]const u8, projects.len);
+    const paths = try arena.alloc([*:0]const u8, projects.len);
     for (projects, paths) |k, *p| p.* = k;
 
     return .{
-        .count = @intCast(paths.len),
+        .handle = handle,
         .paths = paths.ptr,
+        .count = @intCast(paths.len),
         .ok = true,
     };
 }
 
-fn getBoundedCStringArray(gpa: std.mem.Allocator, arr: ?CStringArray, count: u32) ![]const [:0]const u8 {
+fn getBoundedCStringArray(arena: std.mem.Allocator, arr: ?CStringArray, count: u32) ![]const [:0]const u8 {
     if (arr == null or count == 0) return &.{};
 
-    const elems = try gpa.alloc([:0]const u8, count);
+    const elems = try arena.alloc([:0]const u8, count);
     for (0..count) |idx| elems[idx] = std.mem.sliceTo(arr.?[idx], 0);
 
     return elems;

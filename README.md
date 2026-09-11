@@ -98,6 +98,8 @@ int main() {
 
     CsSearchResult result = cs_search_projects(roots, count, opts);
     if (!result.ok) {
+        // even on failure, the result should be freed
+        cs_free_projects(result.handle);
         return 1;
     }
 
@@ -106,7 +108,7 @@ int main() {
         printf("- %s\n", result.paths[i]);
     }
 
-    cs_free_projects(result.paths, result.count);
+    cs_free_projects(result.handle);
     return 0;
 }
 ```

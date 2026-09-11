@@ -1,7 +1,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef struct CsHandle CsHandle;
+
 typedef struct CsSearchResult {
+    CsHandle *handle;
     const char *const *paths;
     uint32_t count;
     bool ok;
@@ -16,4 +19,4 @@ typedef struct CsSearchOpts {
 
 CsSearchResult cs_search_projects(const char *const *root_paths, uint32_t root_count, CsSearchOpts search_opts);
 
-void cs_free_projects(const char *const *projects, uint32_t project_count);
+void cs_free_projects(CsHandle *handle);
