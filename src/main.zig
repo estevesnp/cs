@@ -90,7 +90,8 @@ const Ctx = struct {
     }
 
     fn reportf(ctx: Ctx, comptime fmt: []const u8, args: anytype) !void {
-        ctx.stderr.interface.print(mem.trimEnd(u8, fmt, "\n") ++ "\n", args) catch
+        const format = comptime mem.trimEnd(u8, fmt, "\n") ++ "\n";
+        ctx.stderr.interface.print(format, args) catch
             return ctx.stderr.err.?;
         try ctx.stderr.flush();
     }
@@ -610,7 +611,7 @@ fn searchBlocking(ctx: Ctx, opts: WalkOpts, preview: []const u8) !?[]const u8 {
     const arena = ctx.arena;
     const io = ctx.io;
 
-    const projects = try searchProjects(io, arena, opts, ctx.stderrW(), null);
+    const projects = try searchProjects(io, arena, opts, .stderr, null);
     if (matchProject(opts.query, projects)) |match| return match;
 
     var fzf_proc: FzfProc = undefined;
@@ -685,7 +686,7 @@ fn walkAndMatch(
     reporter: *Io.Writer,
     project_queue: ?*Io.Queue([]const u8),
 ) WalkError!?[]const u8 {
-    const projects = try searchProjects(io, arena, opts, reporter, project_queue);
+    const projects = try searchProjects(io, arena, opts, .fromWriter(reporter), project_queue);
 
     if (projects.len == 0) {
         return error.NoProjectsFound;
@@ -698,7 +699,7 @@ fn searchProjects(
     io: Io,
     arena: Allocator,
     opts: WalkOpts,
-    reporter: *Io.Writer,
+    reporter: walk.Reporter,
     project_queue: ?*Io.Queue([]const u8),
 ) walk.SearchError![]const []const u8 {
     const project_set = try walk.searchProjects(arena, io, opts.roots, .{

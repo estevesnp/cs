@@ -53,11 +53,10 @@ const cs = @import("cswalk");
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.gpa;
-    var stderr = Io.File.stderr().writer(io, &.{});
 
     const roots = &.{ "/home/estevesnp/work", "/home/estevesnp/pers" };
     const opts: cs.SearchOpts = .{
-        .reporter = &stderr.interface,
+        .reporter = .stderr,
         .max_depth = 10,
         .project_markers = &.{ ".git", ".csm" },
     };
@@ -70,7 +69,6 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("- {s}\n", .{project});
     }
 }
-
 ```
 
 ### c lib

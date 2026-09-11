@@ -7,6 +7,8 @@ const ArrayList = std.ArrayList;
 const Writer = Io.Writer;
 const assert = std.debug.assert;
 
+const log = std.log.scoped(.cs);
+
 /// hash set of null terminated slices (`[:0]const u8`)
 /// based off of std.array_hash_map.String(void);
 pub const StringSet = std.array_hash_map.Custom([:0]const u8, void, std.array_hash_map.StringContext, true);
@@ -19,12 +21,38 @@ pub const SearchError = error{NoRootPaths} || Io.File.OpenError || Allocator.Err
 pub const SearchOpts = struct {
     /// optional queue to send paths to
     queue: ?*Io.Queue([]const u8) = null,
-    /// optional writer to report to
-    reporter: ?*Writer = null,
+    /// optional reporter to
+    reporter: Reporter = .none,
     /// max depth for searching for projects
     max_depth: usize = default_max_depth,
     /// marker to identify if a project exists
     project_markers: []const []const u8 = default_project_markers,
+};
+
+/// reporter strategy
+pub const Reporter = union(enum) {
+    /// report to a writer
+    writer: *Writer,
+    /// report to stderr
+    stderr,
+    /// don't report
+    none,
+
+    pub fn fromWriter(w: *Writer) Reporter {
+        return .{ .writer = w };
+    }
+
+    pub fn report(self: Reporter, comptime fmt: []const u8, args: anytype) void {
+        switch (self) {
+            .writer => |w| {
+                const format = comptime "warning: " ++ std.mem.trimEnd(u8, fmt, "\n") ++ "\n";
+                w.print(format, args) catch {};
+                w.flush() catch {};
+            },
+            .stderr => log.warn(fmt, args),
+            .none => {},
+        }
+    }
 };
 
 const Context = struct {
@@ -40,7 +68,7 @@ const Context = struct {
     max_depth: usize,
     project_markers: []const []const u8,
     queue: ?*Io.Queue([]const u8),
-    reporter: ?*Writer,
+    reporter: Reporter,
 
     fn init(gpa: Allocator, io: Io, opts: SearchOpts) Context {
         return .{
@@ -78,13 +106,6 @@ const Context = struct {
         for (0..items_to_pop) |_| {
             const field = self.to_check_stack.pop() orelse return;
             self.gpa.free(field);
-        }
-    }
-
-    fn report(self: *Context, comptime fmt: []const u8, args: anytype) void {
-        if (self.reporter) |reporter| {
-            reporter.print(fmt ++ "\n", args) catch {};
-            reporter.flush() catch {};
         }
     }
 
@@ -134,11 +155,11 @@ fn search(gpa: Allocator, io: Io, root_paths: []const []const u8, opts: SearchOp
     for (root_paths) |root_path| {
         var root_dir = Io.Dir.openDirAbsolute(io, root_path, .{ .iterate = true }) catch |err| switch (err) {
             error.FileNotFound => {
-                ctx.report("root {s} not found, skipping", .{root_path});
+                ctx.reporter.report("root {s} not found, skipping", .{root_path});
                 continue;
             },
             else => |e| {
-                ctx.report("error opening root {s} ({t}), skipping", .{ root_path, e });
+                ctx.reporter.report("error opening root {s} ({t}), skipping", .{ root_path, e });
                 continue;
             },
         };
@@ -200,7 +221,10 @@ fn searchDir(ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
         defer _ = ctx.path_stack.pop();
 
         var dir_to_check = dir.openDir(io, to_check, .{ .iterate = true }) catch |err| {
-            ctx.report("error opening {f} ({t}), skipping", .{ Io.Dir.path.fmtJoin(ctx.path_stack.items), err });
+            ctx.reporter.report(
+                "error opening {f} ({t}), skipping",
+                .{ Io.Dir.path.fmtJoin(ctx.path_stack.items), err },
+            );
             continue;
         };
         defer dir_to_check.close(io);
@@ -399,7 +423,7 @@ test "searchProjects reports properly on non-existing roots" {
     defer gpa.free(expected_repo);
 
     const expected_reported_message = try gpa.print(
-        "root {s} not found, skipping\n",
+        "warning: root {s} not found, skipping\n",
         .{root_paths[2]},
     );
     defer gpa.free(expected_reported_message);
@@ -407,7 +431,7 @@ test "searchProjects reports properly on non-existing roots" {
     var allocating_writer: Writer.Allocating = .init(gpa);
     defer allocating_writer.deinit();
 
-    var projects = try searchProjects(gpa, testing.io, root_paths, .{ .reporter = &allocating_writer.writer });
+    var projects = try searchProjects(gpa, testing.io, root_paths, .{ .reporter = .fromWriter(&allocating_writer.writer) });
     defer freeProjects(gpa, &projects);
 
     try testing.expectEqual(1, projects.count());

@@ -6,6 +6,7 @@ pub const default_max_depth = walk.default_max_depth;
 pub const searchProjects = walk.searchProjects;
 pub const freeProjects = walk.freeProjects;
 
+pub const Reporter = walk.Reporter;
 pub const SearchError = walk.SearchError;
 pub const SearchOpts = walk.SearchOpts;
 pub const StringSet = walk.StringSet;

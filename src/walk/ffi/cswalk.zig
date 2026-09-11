@@ -31,12 +31,7 @@ export fn cs_search_projects(root_paths: ?CStringArray, root_count: u32, opts: C
     var threaded: Io.Threaded = .init_single_threaded;
     const io = threaded.io();
 
-    var stderr_buf: [128]u8 = undefined;
-    const locked = if (opts.enable_logging) io.lockStderr(&stderr_buf, null) catch null else null;
-    defer if (locked != null) io.unlockStderr();
-    const stderr = if (locked) |l| &l.file_writer.interface else null;
-
-    return searchProjects(gpa, io, stderr, root_paths, root_count, opts) catch .{
+    return searchProjects(gpa, io, root_paths, root_count, opts) catch .{
         .count = 0,
         .paths = &.{},
         .ok = false,
@@ -55,7 +50,6 @@ export fn cs_free_projects(projects: ?CStringArray, count: u32) void {
 fn searchProjects(
     gpa: std.mem.Allocator,
     io: Io,
-    stderr: ?*Io.Writer,
     root_paths: ?CStringArray,
     root_count: u32,
     opts: CsSearchOpts,
@@ -69,7 +63,7 @@ fn searchProjects(
     var project_set = try walk.searchProjects(gpa, io, root_paths_bounded, .{
         .max_depth = opts.max_depth,
         .project_markers = project_markers,
-        .reporter = stderr,
+        .reporter = if (opts.enable_logging) .stderr else .none,
     });
     defer project_set.deinit(gpa);
 
