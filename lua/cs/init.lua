@@ -46,6 +46,7 @@ local default_opts = {
   preview = jit.os == "Windows" and "dir {}" or "ls {}",
   roots = {},
   action = "open",
+  prompt = "choose a project> ",
 }
 
 ---@return cs.ResolvedSearchOpts
@@ -62,16 +63,12 @@ local function get_env_opts()
       preview = (env.config and env.config.preview) or default_opts.preview,
       roots = env.roots or default_opts.roots,
       action = default_opts.action,
+      prompt = default_opts.prompt,
     }
   end
 
   return cache.env_opts
 end
-
----@class cs.ResolvedSearchOpts
----@field roots string[]
----@field preview string
----@field action cs.Action
 
 ---@param opts cs.SearchOpts|nil
 ---@return cs.ResolvedSearchOpts
@@ -104,14 +101,21 @@ local action_cb_map = {
   end,
 }
 
----@alias cs.Action "open" | "vsplit" | "tab" | "cd"
+---@class cs.ResolvedSearchOpts
+---@field roots string[]
+---@field preview string
+---@field action cs.Action
+---@field prompt string
 
 ---@class cs.SearchOpts
 ---@field roots string[]|nil
 ---@field preview string|nil
 ---@field action cs.Action|nil
+---@field prompt string|nil
 
----search projects
+---@alias cs.Action "open" | "vsplit" | "tab" | "cd"
+
+---search projects inside fzf picker
 ---@param search_opts cs.SearchOpts|nil
 function M.search_projects(search_opts)
   local opts = resolve_opts(search_opts)
@@ -135,6 +139,7 @@ function M.search_projects(search_opts)
 
   require("fzf-lua").fzf_exec(projects, {
     preview = opts.preview,
+    prompt = opts.prompt,
     actions = {
       default = cb,
     },

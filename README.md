@@ -167,6 +167,7 @@ require("cs").setup({
   roots = {},
   -- only option not fetched from `cs env --full`
   action = "open",
+  prompt = "choose a project> ",
 })
 ```
 
