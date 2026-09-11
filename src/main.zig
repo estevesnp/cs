@@ -780,7 +780,7 @@ fn spawnFzf(io: Io, preview: []const u8, query: []const u8) !process.Child {
     return process.spawn(io, .{
         .argv = &.{
             "fzf",
-            "--header=choose a repo",
+            "--header=choose a project",
             "--reverse",
             "--scheme=path",
             "--preview-label=[ project files ]",
