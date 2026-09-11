@@ -20,6 +20,4 @@ jobs:
         with:
           version: 0.17.0-dev.2085+5e36170b5
       - run: |
-          zig build
-          zig build lib
-          zig build test --summary all
+          zig build all --summary all

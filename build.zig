@@ -78,6 +78,11 @@ pub fn build(b: *std.Build) !void {
     const check_step = b.step("check", "check that app compiles");
     check_step.dependOn(&check_exe.step);
     check_step.dependOn(&exe_tests.step);
+
+    const all_step = b.step("all", "build all");
+    all_step.dependOn(b.getInstallStep());
+    all_step.dependOn(lib_step);
+    all_step.dependOn(test_step);
 }
 
 fn getVersion(b: *std.Build) std.SemanticVersion {
