@@ -57,7 +57,7 @@ function M.build_cswalk(force)
 
   log.info("building cswalk...")
 
-  local build_args = { "zig", "build", "-Dlibcswalk", "-Doptimize=ReleaseSafe" }
+  local build_args = { "zig", "build", "lib", "-Doptimize=ReleaseSafe" }
   local ok, system_res = pcall(vim.system, build_args, { cwd = root })
   if not ok then
     log.error("error building cswalk: %s", system_res)

@@ -38,20 +38,20 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const build_libcswalk = b.option(bool, "libcswalk", "build libcswalk") orelse false;
-    if (build_libcswalk) {
-        const lib = b.addLibrary(.{
-            .name = "cswalk",
-            .linkage = .dynamic,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/walk/ffi/cswalk.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{.{ .name = "walk", .module = walk_mod }},
-            }),
-        });
-        b.installArtifact(lib);
-    }
+    const lib = b.addLibrary(.{
+        .name = "cswalk",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/walk/ffi/cswalk.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "walk", .module = walk_mod }},
+        }),
+    });
+    const lib_install = b.addInstallArtifact(lib, .{});
+
+    const lib_step = b.step("lib", "build libcswalk");
+    lib_step.dependOn(&lib_install.step);
 
     const filters = b.option([]const []const u8, "test-filter", "test filters") orelse &.{};
     const exe_tests = b.addTest(.{

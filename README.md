@@ -78,7 +78,7 @@ pub fn main(init: std.process.Init) !void {
 to build the lib (output is in zig-out/lib):
 
 ```sh
-zig build -Dlibcswalk -Doptimize=ReleaseSafe
+zig build lib -Doptimize=ReleaseSafe
 ```
 
 the header file for the lib is [cswalk.h](./src/walk/ffi/include/cswalk.h)
