@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 
 const walk = @import("walk");
@@ -18,9 +19,15 @@ const CsSearchOpts = extern struct {
     enable_logging: bool,
 };
 
-export fn cs_search_projects(root_paths: ?CStringArray, root_count: u32, opts: CsSearchOpts) CsSearchResult {
-    const gpa = std.heap.smp_allocator;
+const allocator = if (builtin.link_libc)
+    std.heap.c_allocator
+else if (!builtin.single_threaded)
+    std.heap.smp_allocator
+else
+    std.heap.page_allocator;
 
+export fn cs_search_projects(root_paths: ?CStringArray, root_count: u32, opts: CsSearchOpts) CsSearchResult {
+    const gpa = allocator;
     var threaded: Io.Threaded = .init_single_threaded;
     const io = threaded.io();
 
@@ -38,7 +45,7 @@ export fn cs_search_projects(root_paths: ?CStringArray, root_count: u32, opts: C
 
 export fn cs_free_projects(projects: ?CStringArray, count: u32) void {
     if (projects == null or count == 0) return;
-    const gpa = std.heap.smp_allocator;
+    const gpa = allocator;
 
     const allocated_projects = projects.?[0..count];
     for (allocated_projects) |proj| gpa.free(std.mem.sliceTo(proj, 0));
