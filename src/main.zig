@@ -30,9 +30,10 @@ pub fn main(init: process.Init) !void {
 
     const args = try init.minimal.args.toSlice(ctx.arena);
 
-    const cmd = parseArgs(&stderr.interface, args) catch |err| switch (err) {
+    const cmd = parseArgs(ctx.arena, ctx.stderrW(), args) catch |err| switch (err) {
         error.Help => try writeHelpAndExit(ctx.stdout),
         error.Usage => process.exit(1), // assumes usage error has already been printed
+        error.OutOfMemory => |e| return e,
     };
 
     switch (cmd) {
@@ -141,12 +142,19 @@ const usage =
     \\                              the option can be chosen directly, e.g. --blocking
     \\                              options: concurrent (default), blocking
     \\
-    \\
     \\    -a, --action <action>     select action to perform on project selection.
     \\                              the option can be chosen directly, e.g. --print
     \\                              options: session, window, print
     \\
-    \\    -m, --max-depth <depth>   how many directories deep to search for in each
+    \\    -r, -root <root> ...      set which roots to search from.
+    \\                              can pass multiple roots by repeating the flag.
+    \\                              e.g.: cs search -r . -r ../dir
+    \\
+    \\    -m, -marker <marker> ...  set markers to determine when a project was found.
+    \\                              can pass multiple markers by repeating the flag.
+    \\                              e.g.: cs search -m .git -m build.zig
+    \\
+    \\    -d, --max-depth <depth>   how many directories deep to search for in each
     \\                              root. defaults to 5
     \\
     \\    -p, --preview <preview>   preview to use on fzf. e.g.: 'ls {}'
@@ -214,7 +222,7 @@ const usage =
     \\
 ;
 
-const CmdError = error{ Help, Usage };
+const CmdError = error{ Help, Usage, OutOfMemory };
 
 const Cmd = union(enum) {
     search: SearchOpts,
@@ -231,9 +239,9 @@ const SearchOpts = struct {
     max_depth: ?usize,
     strategy: ?SearchStrategy,
     action: ?Action,
+    roots: ?[]const []const u8,
+    markers: ?[]const []const u8,
     // TODO - stop iterating on marker match?
-    // TODO - roots?
-    // TODO - markers?
 };
 
 const ConfigDisplay = enum { full, partial };
@@ -247,6 +255,7 @@ const EditOpts = struct {
     editor: ?[]const u8,
 };
 
+// TODO - list?
 const RootAction = enum {
     add,
     remove,
@@ -268,7 +277,7 @@ const ShellOpts = struct {
     shell: ?Shell,
 };
 
-fn parseArgs(w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
+fn parseArgs(arena: Allocator, w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
     var it: Iter = .init(args[1..]);
 
     while (it.next()) |arg| {
@@ -279,25 +288,30 @@ fn parseArgs(w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
         if (eqlAny(arg, &.{ "roots", "root" })) return .{ .roots = try parseRoots(&it, w) };
         if (mem.eql(u8, arg, "shell")) return .{ .shell = try parseShell(&it, w) };
 
-        if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it, w) };
+        if (mem.eql(u8, arg, "search")) return .{ .search = try parseSearch(&it, w, arena) };
 
         // defaulting to search, so we need to un-consume the arg
         it.prev();
-        return .{ .search = try parseSearch(&it, w) };
+        return .{ .search = try parseSearch(&it, w, arena) };
     }
 
     // default to search when no args are passed
-    return .{ .search = try parseSearch(&it, w) };
+    return .{ .search = try parseSearch(&it, w, arena) };
 }
 
-fn parseSearch(it: *Iter, w: *Io.Writer) CmdError!SearchOpts {
+fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
     var opts: SearchOpts = .{
         .query = null,
         .preview = null,
         .max_depth = null,
         .strategy = null,
         .action = null,
+        .roots = null,
+        .markers = null,
     };
+
+    var roots: std.ArrayList([]const u8) = .empty;
+    var markers: std.ArrayList([]const u8) = .empty;
 
     var parsing_args = true;
     while (it.next()) |arg| {
@@ -320,7 +334,7 @@ fn parseSearch(it: *Iter, w: *Io.Writer) CmdError!SearchOpts {
                 continue;
             }
 
-            if (try getNamedArg(w, it, arg, &.{ "--max-depth", "-m" })) |named| {
+            if (try getNamedArg(w, it, arg, &.{ "--max-depth", "-d" })) |named| {
                 opts.max_depth = std.fmt.parseInt(usize, named, 0) catch
                     return usageError(w, "invalid max-depth value: {q}", .{named});
                 continue;
@@ -333,6 +347,16 @@ fn parseSearch(it: *Iter, w: *Io.Writer) CmdError!SearchOpts {
 
             if (mem.eql(u8, arg, "--no-preview")) {
                 opts.preview = "";
+                continue;
+            }
+
+            if (try getNamedArg(w, it, arg, &.{ "--root", "-r" })) |named| {
+                try roots.append(arena, named);
+                continue;
+            }
+
+            if (try getNamedArg(w, it, arg, &.{ "--marker", "-m" })) |named| {
+                try markers.append(arena, named);
                 continue;
             }
 
@@ -352,6 +376,9 @@ fn parseSearch(it: *Iter, w: *Io.Writer) CmdError!SearchOpts {
         }
         opts.query = arg;
     }
+
+    if (roots.items.len > 0) opts.roots = roots.items;
+    if (markers.items.len > 0) opts.markers = markers.items;
 
     return opts;
 }
@@ -551,16 +578,18 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
 
     const config_with_roots = try cfg.readConfigWithRoots(io, arena, ctx.environ_map, ctx.stderrW());
     const config = cfg.normalizeConfig(config_with_roots.config);
-    const roots = config_with_roots.roots;
 
+    const roots = if (opts.roots) |cli_roots| try resolveRoots(ctx, cli_roots) else config_with_roots.roots;
+    const markers = opts.markers orelse config.markers;
+    const max_depth = opts.max_depth orelse config.max_depth;
     const preview = opts.preview orelse config.preview;
     const query = opts.query orelse "";
 
     const walk_opts: WalkOpts = .{
         .query = query,
         .roots = roots,
-        .markers = config.markers,
-        .max_depth = opts.max_depth orelse config.max_depth,
+        .markers = markers,
+        .max_depth = max_depth,
     };
 
     // needed for concurrent so that we don't print to screen while fzf is running
@@ -605,6 +634,26 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
             }
         },
     }
+}
+
+fn resolveRoots(ctx: Ctx, cli_roots: []const []const u8) ![]const []const u8 {
+    const io = ctx.io;
+    const arena = ctx.arena;
+
+    if (cli_roots.len == 0) return &.{};
+
+    const roots = try arena.alloc([]const u8, cli_roots.len);
+    const cwd = try process.currentPathAlloc(io, arena);
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(arena);
+    for (cli_roots, roots) |c, *r| {
+        defer buf.clearRetainingCapacity();
+        try Io.Dir.path.resolveAppend(arena, &buf, &.{cwd, c});
+        r.* = try arena.dupe(u8, buf.items);
+    }
+
+    return roots;
 }
 
 fn searchBlocking(ctx: Ctx, opts: WalkOpts, preview: []const u8) !?[]const u8 {
@@ -1003,8 +1052,12 @@ fn addRoots(ctx: Ctx, config_dir: Io.Dir, paths: []const []const u8, clear: bool
     const cwd = try process.currentPathAlloc(io, arena);
     var roots_set: StringSet = try .init(arena, roots, &.{});
 
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(arena);
     for (paths) |path| {
-        const resolved = try Io.Dir.path.resolve(arena, &.{ cwd, path });
+        defer buf.clearRetainingCapacity();
+        try Io.Dir.path.resolveAppend(arena, &buf, &.{ cwd, path });
+        const resolved = try arena.dupe(u8, buf.items);
 
         const gop = try roots_set.getOrPut(arena, resolved);
         if (gop.found_existing) try ctx.reportf("path {s} already exists", .{resolved});
@@ -1035,8 +1088,12 @@ fn removeRoots(ctx: Ctx, config_dir: Io.Dir, paths: []const []const u8, clear: b
     const cwd = try process.currentPathAlloc(io, arena);
     var roots_set: StringSet = try .init(arena, roots, &.{});
 
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(arena);
     for (paths) |path| {
-        const resolved = try Io.Dir.path.resolve(arena, &.{ cwd, path });
+        defer buf.clearRetainingCapacity();
+        try Io.Dir.path.resolveAppend(arena, &buf, &.{ cwd, path });
+        const resolved = try arena.dupe(u8, buf.items);
 
         const existed = roots_set.orderedRemove(resolved);
         if (!existed) try ctx.reportf("path {s} didn't exist", .{resolved});

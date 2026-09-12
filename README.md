@@ -276,12 +276,19 @@ search:
                               the option can be chosen directly, e.g. --blocking
                               options: concurrent (default), blocking
 
-
     -a, --action <action>     select action to perform on project selection.
                               the option can be chosen directly, e.g. --print
                               options: session, window, print
 
-    -m, --max-depth <depth>   how many directories deep to search for in each
+    -r, -root <root> ...      set which roots to search from.
+                              can pass multiple roots by repeating the flag.
+                              e.g.: cs search -r . -r ../dir
+
+    -m, -marker <marker> ...  set markers to determine when a project was found.
+                              can pass multiple markers by repeating the flag.
+                              e.g.: cs search -m .git -m build.zig
+
+    -d, --max-depth <depth>   how many directories deep to search for in each
                               root. defaults to 5
 
     -p, --preview <preview>   preview to use on fzf. e.g.: 'ls {}'
