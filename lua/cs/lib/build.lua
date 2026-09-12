@@ -66,7 +66,7 @@ function M.build_cswalk(force)
 
   local res = system_res:wait()
   if res.code ~= 0 then
-    log.error("build exited with unexpected code: %s", res.code)
+    log.error("build exited with unexpected code %d: %s", res.code, res.stderr)
     return false
   end
 
