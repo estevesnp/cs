@@ -120,9 +120,8 @@ fn handleTmuxWindow(
 /// normalizes the basename of a directory for tmux, trimming it and replacing
 /// `.` with `_`.
 fn normalizeBasename(basename: []const u8, buf: []u8) []u8 {
-    assert(buf.len >= basename.len);
-
-    const trimmed = mem.trim(u8, basename, ".");
+    const end = @min(buf.len, basename.len);
+    const trimmed = mem.trim(u8, basename[0..end], ".");
     const normalized = buf[0..trimmed.len];
 
     for (trimmed, 0..) |char, idx| {

@@ -280,11 +280,11 @@ search:
                               the option can be chosen directly, e.g. --print
                               options: session, window, print
 
-    -r, -root <root> ...      set which roots to search from.
+    -r, --root <root> ...     set which roots to search from.
                               can pass multiple roots by repeating the flag.
                               e.g.: cs search -r . -r ../dir
 
-    -m, -marker <marker> ...  set markers to determine when a project was found.
+    -m, --marker <mark> ...   set markers to determine when a project was found.
                               can pass multiple markers by repeating the flag.
                               e.g.: cs search -m .git -m build.zig
 
