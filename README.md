@@ -39,7 +39,10 @@ zig fetch --save git+https://github.com/estevesnp/cs
 then in your build.zig:
 
 ```zig
-const cs = b.dependency("cs", .{});
+const cs = b.dependency("cs", .{
+    .target = target,
+    .optimize = optimize,
+});
 exe.root_module.addImport("cswalk", cs.module("cswalk"));
 ```
 
