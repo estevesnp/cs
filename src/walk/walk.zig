@@ -25,7 +25,7 @@ pub const SearchOpts = struct {
     /// optional reporter to
     reporter: Reporter = .none,
     /// max depth for searching for projects
-    max_depth: usize = default_max_depth,
+    max_depth: isize = default_max_depth,
     /// marker to identify if a project exists
     project_markers: []const []const u8 = default_project_markers,
     /// stop iterating a dir as soon as there is a marker is found
@@ -78,7 +78,7 @@ const Context = struct {
         return .{
             .gpa = gpa,
             .io = io,
-            .max_depth = if (opts.max_depth == 0) default_max_depth else opts.max_depth,
+            .max_depth = if (opts.max_depth < 0) default_max_depth else @intCast(opts.max_depth),
             .project_markers = if (opts.project_markers.len == 0) default_project_markers else opts.project_markers,
             .continue_on_marker = opts.continue_on_marker,
             .queue = opts.queue,

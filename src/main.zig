@@ -778,7 +778,7 @@ fn searchProjects(
         .queue = project_queue,
         .project_markers = opts.markers,
         .continue_on_marker = opts.continue_on_marker,
-        .max_depth = opts.max_depth,
+        .max_depth = @intCast(opts.max_depth),
     });
     return project_set.keys();
 }

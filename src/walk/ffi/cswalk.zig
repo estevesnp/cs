@@ -18,7 +18,7 @@ const CsSearchResult = extern struct {
 const CsSearchOpts = extern struct {
     project_markers: ?CStringArray,
     markers_count: u32,
-    max_depth: u32,
+    max_depth: i32,
     continue_on_marker: bool,
     enable_logging: bool,
 };
