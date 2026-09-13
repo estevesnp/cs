@@ -166,6 +166,7 @@ require("cs").setup({
   preview = jit.os == "Windows" and "dir {}" or "ls {}",
   roots = {},
   markers = { ".git", ".jj" },
+  continue_on_marker = false,
 
   -- options not fetched from `cs env --full`
   action = "open",
@@ -251,7 +252,7 @@ subcommands:
   search                      search for project
   env                         print config and environment information
   edit                        edit config
-  roots                       add or remove paths to roots. also accepts root
+  roots                       add or remove paths to roots. also accepts 'root'
   shell                       print shell integrations
   version                     print version. also accepts --version and -v
   help                        print this message. also accepts --help and -h
@@ -267,7 +268,7 @@ search:
                               to any project, instantly selects it
 
   flags:
-    -s, --strategy <strat>    strategy for how to search for projects.
+    -S, --strategy <strat>    strategy for how to search for projects.
                               concurrent: search for projects and attempt to
                                           match while also displaying paths
                                           inside fzf
@@ -287,6 +288,11 @@ search:
     -m, --marker <mark> ...   set markers to determine when a project was found.
                               can pass multiple markers by repeating the flag.
                               e.g.: cs search -m .git -m build.zig
+
+    -s, --marker-stop         stop iterating a directory when a marker is found.
+
+    -c, --marker-continue     continue iterating a directory when a marker is
+                              found. opposite of --marker-stop
 
     -d, --max-depth <depth>   how many directories deep to search for in each
                               root. defaults to 5

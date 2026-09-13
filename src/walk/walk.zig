@@ -15,6 +15,7 @@ pub const StringSet = std.array_hash_map.Custom([:0]const u8, void, std.array_ha
 
 pub const default_project_markers: []const []const u8 = &.{ ".git", ".jj" };
 pub const default_max_depth = 5;
+pub const default_continue_on_marker = false;
 
 pub const SearchError = error{NoRootPaths} || Io.File.OpenError || Allocator.Error || Io.Cancelable;
 
@@ -27,6 +28,8 @@ pub const SearchOpts = struct {
     max_depth: usize = default_max_depth,
     /// marker to identify if a project exists
     project_markers: []const []const u8 = default_project_markers,
+    /// stop iterating a dir as soon as there is a marker is found
+    continue_on_marker: bool = default_continue_on_marker,
 };
 
 /// reporter strategy
@@ -67,6 +70,7 @@ const Context = struct {
     // config
     max_depth: usize,
     project_markers: []const []const u8,
+    continue_on_marker: bool,
     queue: ?*Io.Queue([]const u8),
     reporter: Reporter,
 
@@ -75,9 +79,10 @@ const Context = struct {
             .gpa = gpa,
             .io = io,
             .max_depth = if (opts.max_depth == 0) default_max_depth else opts.max_depth,
+            .project_markers = if (opts.project_markers.len == 0) default_project_markers else opts.project_markers,
+            .continue_on_marker = opts.continue_on_marker,
             .queue = opts.queue,
             .reporter = opts.reporter,
-            .project_markers = if (opts.project_markers.len == 0) default_project_markers else opts.project_markers,
         };
     }
 
@@ -199,8 +204,10 @@ fn searchDir(ctx: *Context, dir: Io.Dir, depth: usize) SearchError!void {
                 if (ctx.queue) |queue| queue.putOne(io, path_name) catch {};
             }
 
-            ctx.popToCheck(ctx.to_check_stack.items.len - to_check_start_idx);
-            return;
+            if (!ctx.continue_on_marker) {
+                ctx.popToCheck(ctx.to_check_stack.items.len - to_check_start_idx);
+                return;
+            }
         }
 
         if (inner.kind != .directory) continue;
@@ -256,6 +263,7 @@ test "searchProjects returns correct projects" {
     try test_assertProjects(
         gpa,
         gpa,
+        false,
         &.{
             &.{base_path},
         },
@@ -271,6 +279,24 @@ test "searchProjects returns correct projects" {
     try test_assertProjects(
         gpa,
         gpa,
+        true,
+        &.{
+            &.{base_path},
+        },
+        &.{
+            &.{ base_path, "root-1", "nest-1-1", "proj-1-1-1" },
+            &.{ base_path, "root-1", "proj-1-1" },
+            &.{ base_path, "root-1", "proj-1-2" },
+            &.{ base_path, "root-2", "proj-2-1" },
+            &.{ base_path, "root-3" },
+            &.{ base_path, "root-3", "ziglab" },
+        },
+    );
+
+    try test_assertProjects(
+        gpa,
+        gpa,
+        false,
         &.{
             &.{base_path},
             &.{ base_path, "root-1" },
@@ -289,6 +315,7 @@ test "searchProjects returns correct projects" {
     try test_assertProjects(
         gpa,
         gpa,
+        false,
         &.{
             &.{ base_path, "root-1" },
         },
@@ -302,6 +329,7 @@ test "searchProjects returns correct projects" {
     try test_assertProjects(
         gpa,
         gpa,
+        false,
         &.{
             &.{ base_path, "root-2" },
             &.{ base_path, "root-3" },
@@ -316,6 +344,7 @@ test "searchProjects returns correct projects" {
     try test_assertProjects(
         gpa,
         gpa,
+        false,
         &.{
             &.{ base_path, "root-4" },
         },
@@ -325,12 +354,43 @@ test "searchProjects returns correct projects" {
     try test_assertProjects(
         gpa,
         gpa,
+        false,
         &.{
             &.{ base_path, "root-2" },
             &.{ base_path, "root-2" },
         },
         &.{
             &.{ base_path, "root-2", "proj-2-1" },
+        },
+    );
+}
+
+test "searchProjects works with stop_on_marker == false" {
+    const gpa = testing.allocator;
+
+    var tmp_dir_state = testing.tmpDir(.{});
+    defer tmp_dir_state.cleanup();
+
+    const tmp_dir = tmp_dir_state.dir;
+
+    const base_path = try tmp_dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(base_path);
+
+    try test_mountTreeNestedMarkers(tmp_dir);
+
+    try test_assertProjects(
+        gpa,
+        gpa,
+        true,
+        &.{
+            &.{base_path},
+        },
+        &.{
+            &.{ base_path, "root-1" },
+            &.{ base_path, "root-2" },
+            &.{ base_path, "root-2", "root-2-1" },
+            &.{ base_path, "root-2", ".git" },
+            &.{ base_path, "root-3" },
         },
     );
 }
@@ -356,6 +416,7 @@ test "searchProjects doesn't leak memory on nested tree" {
         test_assertProjects,
         .{
             gpa,
+            false,
             &.{
                 &.{base_path},
             },
@@ -391,6 +452,7 @@ test "searchProjects doesn't leak memory on file only filetree" {
         test_assertProjects,
         .{
             gpa,
+            false,
             &.{
                 &.{base_path},
             },
@@ -442,6 +504,7 @@ test "searchProjects reports properly on non-existing roots" {
 fn test_assertProjects(
     testing_allocator: Allocator,
     util_allocator: Allocator,
+    continue_on_marker: bool,
     root_paths: []const []const []const u8,
     expected_projects_paths: []const []const []const u8,
 ) !void {
@@ -466,6 +529,7 @@ fn test_assertProjects(
 
     var project_set = try searchProjects(testing_allocator, testing.io, roots, .{
         .queue = &queue,
+        .continue_on_marker = continue_on_marker,
     });
     defer freeProjects(testing_allocator, &project_set);
 
@@ -503,10 +567,14 @@ fn test_assertProjects(
         for (written_projects) |p| std.debug.print("  '{s}'\n", .{p});
     }
 
-    if (returned_not_found or written_not_found) return error.NoMatch;
+    if (returned_not_found or written_not_found) {
+        std.debug.print("expected projects:\n", .{});
+        for (expected_projects) |p| std.debug.print("  '{s}'\n", .{p});
+        return error.NoMatch;
+    }
 }
 
-const WalkTest = struct {
+const walk_test = struct {
     const Node = struct {
         name: []const u8,
         type: enum { file, directory },
@@ -527,15 +595,15 @@ const WalkTest = struct {
 };
 
 fn test_mountNestedTree(root: Io.Dir) !void {
-    const w = WalkTest;
-    const tree: []const WalkTest.Node = &.{
+    const w = walk_test;
+    const tree: []const walk_test.Node = &.{
         w.dir("root-1", &.{
             w.file("a-file.txt"),
             w.dir("nest-1-1", &.{
                 w.dir("not-proj-1-1-1", &.{
                     w.file("documents.csv"),
                 }),
-                w.dir("proj-1-1-1", &.{ // root
+                w.dir("proj-1-1-1", &.{ // proj
                     w.dir(".git", &.{}),
                 }),
             }),
@@ -546,27 +614,27 @@ fn test_mountNestedTree(root: Io.Dir) !void {
                     }),
                 }),
             }),
-            w.dir("proj-1-1", &.{ // root
+            w.dir("proj-1-1", &.{ // proj
                 w.file(".abc"),
                 w.dir(".git", &.{}),
                 w.file("text.txt"),
             }),
-            w.dir("proj-1-2", &.{ // root
+            w.dir("proj-1-2", &.{ // proj
                 w.file(".jj"),
                 w.file("README.md"),
             }),
         }),
         w.dir("root-2", &.{
-            w.dir("proj-2-1", &.{ // root
+            w.dir("proj-2-1", &.{ // proj
                 w.file(".jj"),
                 w.dir("src", &.{
                     w.file("main.c"),
                 }),
             }),
         }),
-        w.dir("root-3", &.{
+        w.dir("root-3", &.{ // proj
             w.dir(".git", &.{}),
-            w.dir("ziglab", &.{ // root
+            w.dir("ziglab", &.{ // inner proj
                 w.dir(".git", &.{}),
             }),
         }),
@@ -585,9 +653,33 @@ fn test_mountNestedTree(root: Io.Dir) !void {
     try test_mountFilesystem(root, tree);
 }
 
+fn test_mountTreeNestedMarkers(root: Io.Dir) !void {
+    const w = walk_test;
+
+    const tree: []const walk_test.Node = &.{
+        w.dir("root-1", &.{ // proj
+            w.file(".git"),
+        }),
+        w.dir("root-2", &.{ // proj
+            w.file(".jj"),
+            w.dir("root-2-1", &.{ // inner proj
+                w.file(".git"),
+            }),
+            w.dir(".git", &.{ // inner proj
+                w.dir(".jj", &.{}),
+            }),
+        }),
+        w.dir("root-3", &.{
+            w.file(".jj"), // root
+        }),
+    };
+
+    try test_mountFilesystem(root, tree);
+}
+
 fn test_mountFilesOnlyTree(root: Io.Dir) !void {
-    const w = WalkTest;
-    const tree: []const WalkTest.Node = &.{
+    const w = walk_test;
+    const tree: []const walk_test.Node = &.{
         w.file("foo"),
         w.file("bar"),
         w.file("bar"),
@@ -596,13 +688,13 @@ fn test_mountFilesOnlyTree(root: Io.Dir) !void {
     try test_mountFilesystem(root, tree);
 }
 
-fn test_mountFilesystem(root: Io.Dir, tree: []const WalkTest.Node) !void {
+fn test_mountFilesystem(root: Io.Dir, tree: []const walk_test.Node) !void {
     for (tree) |node| {
         try test_createFilesystem(root, node);
     }
 }
 
-fn test_createFilesystem(parent: Io.Dir, node: WalkTest.Node) !void {
+fn test_createFilesystem(parent: Io.Dir, node: walk_test.Node) !void {
     if (node.type == .file) {
         var f = try parent.createFile(testing.io, node.name, .{});
         f.close(testing.io);

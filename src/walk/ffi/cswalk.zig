@@ -19,6 +19,7 @@ const CsSearchOpts = extern struct {
     project_markers: ?CStringArray,
     markers_count: u32,
     max_depth: u32,
+    continue_on_marker: bool,
     enable_logging: bool,
 };
 
@@ -80,6 +81,7 @@ fn searchProjects(
     var project_set = try walk.searchProjects(arena, io, root_paths_bounded, .{
         .max_depth = opts.max_depth,
         .project_markers = project_markers,
+        .continue_on_marker = opts.continue_on_marker,
         .reporter = if (opts.enable_logging) .stderr else .none,
     });
 

@@ -117,7 +117,7 @@ const usage =
     \\  search                      search for project
     \\  env                         print config and environment information
     \\  edit                        edit config
-    \\  roots                       add or remove paths to roots. also accepts root
+    \\  roots                       add or remove paths to roots. also accepts 'root'
     \\  shell                       print shell integrations
     \\  version                     print version. also accepts --version and -v
     \\  help                        print this message. also accepts --help and -h
@@ -133,7 +133,7 @@ const usage =
     \\                              to any project, instantly selects it
     \\
     \\  flags:
-    \\    -s, --strategy <strat>    strategy for how to search for projects.
+    \\    -S, --strategy <strat>    strategy for how to search for projects.
     \\                              concurrent: search for projects and attempt to
     \\                                          match while also displaying paths
     \\                                          inside fzf
@@ -153,6 +153,11 @@ const usage =
     \\    -m, --marker <mark> ...   set markers to determine when a project was found.
     \\                              can pass multiple markers by repeating the flag.
     \\                              e.g.: cs search -m .git -m build.zig
+    \\
+    \\    -s, --marker-stop         stop iterating a directory when a marker is found.
+    \\
+    \\    -c, --marker-continue     continue iterating a directory when a marker is
+    \\                              found. opposite of --marker-stop
     \\
     \\    -d, --max-depth <depth>   how many directories deep to search for in each
     \\                              root. defaults to 5
@@ -241,7 +246,7 @@ const SearchOpts = struct {
     action: ?Action,
     roots: ?[]const []const u8,
     markers: ?[]const []const u8,
-    // TODO - stop iterating on marker match?
+    continue_on_marker: ?bool,
 };
 
 const ConfigDisplay = enum { full, partial };
@@ -255,7 +260,6 @@ const EditOpts = struct {
     editor: ?[]const u8,
 };
 
-// TODO - list?
 const RootAction = enum {
     add,
     remove,
@@ -308,6 +312,7 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
         .action = null,
         .roots = null,
         .markers = null,
+        .continue_on_marker = null,
     };
 
     var roots: std.ArrayList([]const u8) = .empty;
@@ -321,18 +326,6 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
                 continue;
             }
             if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
-
-            if (try getNamedArg(w, it, arg, &.{ "--strategy", "-s" })) |named| {
-                opts.strategy = std.meta.stringToEnum(SearchStrategy, named) orelse
-                    return usageError(w, "invalid strategy value: {q}", .{named});
-                continue;
-            }
-
-            if (try getNamedArg(w, it, arg, &.{ "--action", "-a" })) |named| {
-                opts.action = std.meta.stringToEnum(Action, named) orelse
-                    return usageError(w, "invalid action value: {q}", .{named});
-                continue;
-            }
 
             if (try getNamedArg(w, it, arg, &.{ "--max-depth", "-d" })) |named| {
                 opts.max_depth = std.fmt.parseInt(usize, named, 0) catch
@@ -350,6 +343,16 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
                 continue;
             }
 
+            if (eqlAny(arg, &.{ "--continue-on-marker", "-c" })) {
+                opts.continue_on_marker = true;
+                continue;
+            }
+
+            if (eqlAny(arg, &.{ "--stop-on-marker", "-s" })) {
+                opts.continue_on_marker = false;
+                continue;
+            }
+
             if (try getNamedArg(w, it, arg, &.{ "--root", "-r" })) |named| {
                 try roots.append(arena, named);
                 continue;
@@ -357,6 +360,18 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
 
             if (try getNamedArg(w, it, arg, &.{ "--marker", "-m" })) |named| {
                 try markers.append(arena, named);
+                continue;
+            }
+
+            if (try getNamedArg(w, it, arg, &.{ "--strategy", "-S" })) |named| {
+                opts.strategy = std.meta.stringToEnum(SearchStrategy, named) orelse
+                    return usageError(w, "invalid strategy value: {q}", .{named});
+                continue;
+            }
+
+            if (try getNamedArg(w, it, arg, &.{ "--action", "-a" })) |named| {
+                opts.action = std.meta.stringToEnum(Action, named) orelse
+                    return usageError(w, "invalid action value: {q}", .{named});
                 continue;
             }
 
@@ -581,6 +596,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
 
     const roots = if (opts.roots) |cli_roots| try resolveRoots(ctx, cli_roots) else config_with_roots.roots;
     const markers = opts.markers orelse config.markers;
+    const stop_on_marker = opts.continue_on_marker orelse config.continue_on_marker;
     const max_depth = opts.max_depth orelse config.max_depth;
     const preview = opts.preview orelse config.preview;
     const query = opts.query orelse "";
@@ -589,6 +605,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
         .query = query,
         .roots = roots,
         .markers = markers,
+        .continue_on_marker = stop_on_marker,
         .max_depth = max_depth,
     };
 
@@ -649,7 +666,7 @@ fn resolveRoots(ctx: Ctx, cli_roots: []const []const u8) ![]const []const u8 {
     defer buf.deinit(arena);
     for (cli_roots, roots) |c, *r| {
         defer buf.clearRetainingCapacity();
-        try Io.Dir.path.resolveAppend(arena, &buf, &.{cwd, c});
+        try Io.Dir.path.resolveAppend(arena, &buf, &.{ cwd, c });
         r.* = try arena.dupe(u8, buf.items);
     }
 
@@ -723,6 +740,7 @@ const WalkOpts = struct {
     query: []const u8,
     roots: []const []const u8,
     markers: []const []const u8,
+    continue_on_marker: bool,
     max_depth: usize,
 };
 
@@ -755,6 +773,7 @@ fn searchProjects(
         .reporter = reporter,
         .queue = project_queue,
         .project_markers = opts.markers,
+        .continue_on_marker = opts.continue_on_marker,
         .max_depth = opts.max_depth,
     });
     return project_set.keys();

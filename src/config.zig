@@ -45,6 +45,7 @@ pub const EditMode = enum {
 
 pub const Config = struct {
     markers: []const []const u8 = walk.default_project_markers,
+    continue_on_marker: bool = false,
     max_depth: usize = walk.default_max_depth,
     strategy: SearchStrategy = if (builtin.single_threaded) .blocking else .concurrent,
     action: Action = .session,

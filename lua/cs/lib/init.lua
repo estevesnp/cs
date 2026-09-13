@@ -51,15 +51,22 @@ local function to_c_string_arr(arr)
   return c_arr
 end
 
----find projects for roots
----@param roots string[]|nil
----@param markers string[]|nil
----@return string[]
-function M.search_projects(roots, markers)
-  roots = roots or {}
-  markers = markers or {}
+---@class cs.lib.SearchOpts
+---@field roots string[]|nil
+---@field markers string[]|nil
+---@field continue_on_marker boolean|nil
 
-  if #roots == 0 then
+---find projects for roots
+---@param opts cs.lib.SearchOpts
+---@return string[]
+function M.search_projects(opts)
+  opts.roots = opts.roots or {}
+  opts.markers = opts.markers or {}
+  if opts.continue_on_marker == nil then
+    opts.continue_on_marker = false
+  end
+
+  if #opts.roots == 0 then
     return {}
   end
 
@@ -69,12 +76,13 @@ function M.search_projects(roots, markers)
     return {}
   end
 
-  local opts = ffi.new("CsSearchOpts")
-  opts.enable_logging = true
-  opts.project_markers = to_c_string_arr(markers)
-  opts.markers_count = #markers
+  local cs_opts = ffi.new("CsSearchOpts")
+  cs_opts.enable_logging = true
+  cs_opts.project_markers = to_c_string_arr(opts.markers)
+  cs_opts.markers_count = #opts.markers
+  cs_opts.continue_on_marker = opts.continue_on_marker
 
-  local result = lib.cs_search_projects(to_c_string_arr(roots), #roots, opts)
+  local result = lib.cs_search_projects(to_c_string_arr(opts.roots), #opts.roots, cs_opts)
   if not result.ok then
     lib.cs_free_projects(result.handle)
     return {}

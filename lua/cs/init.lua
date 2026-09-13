@@ -14,6 +14,7 @@ local cache = {
 ---@class cs.Config
 ---@field markers string[]
 ---@field preview string
+---@field continue_on_marker boolean
 
 ---@return cs.Env|nil
 local function get_cs_env()
@@ -47,6 +48,7 @@ local default_opts = {
   preview = jit.os == "Windows" and "dir {}" or "ls {}",
   roots = {},
   markers = { ".git", ".jj" },
+  continue_on_marker = false,
   action = "open",
   prompt = "choose a project> ",
 }
@@ -61,10 +63,17 @@ local function get_env_opts()
   if not env then
     cache.env_opts = default_opts
   else
+    local config = env.config or {}
+    local continue_on_marker = config.continue_on_marker
+    if continue_on_marker == nil then
+      continue_on_marker = default_opts.continue_on_marker
+    end
+
     cache.env_opts = {
-      preview = (env.config and env.config.preview) or default_opts.preview,
+      continue_on_marker = continue_on_marker,
+      preview = config.preview or default_opts.preview,
       roots = env.roots or default_opts.roots,
-      markers = (env.config and env.config.markers) or default_opts.markers,
+      markers = config.markers or default_opts.markers,
       action = default_opts.action,
       prompt = default_opts.prompt,
     }
@@ -104,9 +113,10 @@ local action_cb_map = {
   end,
 }
 
----@class cs.ResolvedSearchOpts
+---@class cs.ResolvedSearchOpts : cs.lib.SearchOpts
 ---@field roots string[]
 ---@field markers string[]
+---@field continue_on_marker boolean
 ---@field preview string
 ---@field action cs.Action
 ---@field prompt string
@@ -114,6 +124,7 @@ local action_cb_map = {
 ---@class cs.SearchOpts
 ---@field roots string[]|nil
 ---@field markers string[]|nil
+---@field continue_on_marker boolean|nil
 ---@field preview string|nil
 ---@field action cs.Action|nil
 ---@field prompt string|nil
@@ -136,7 +147,7 @@ function M.search_projects(search_opts)
     return
   end
 
-  local projects = require("cs.lib").search_projects(opts.roots)
+  local projects = require("cs.lib").search_projects(opts)
   if #projects == 0 then
     log.warn("no projects found")
     return
@@ -162,7 +173,7 @@ function M.list_projects(roots)
     log.warn("no roots found")
     return {}
   end
-  return require("cs.lib").search_projects(roots)
+  return require("cs.lib").search_projects({ roots = roots })
 end
 
 ---set default opts. opts from `cs env --full` still override these.
