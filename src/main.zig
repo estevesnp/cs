@@ -584,6 +584,8 @@ const Iter = struct {
 
 fn printVersion(ctx: Ctx) !void {
     options.cs_version.format(ctx.stdoutW()) catch return ctx.stdoutErr();
+    if (try ctx.stdout.file.isTty(ctx.io))
+        ctx.stdoutW().writeByte('\n') catch return ctx.stdoutErr();
     try ctx.stdout.flush();
 }
 
@@ -631,6 +633,8 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     switch (action) {
         .print => {
             ctx.stdoutW().writeAll(selection) catch return ctx.stdoutErr();
+            if (try ctx.stdout.file.isTty(io))
+                ctx.stdoutW().writeByte('\n') catch return ctx.stdoutErr();
             try ctx.stdout.flush();
         },
         inline .session, .window => |a| {
@@ -926,6 +930,8 @@ fn printEnv(ctx: Ctx, opts: EnvOpts) !void {
             std.json.Stringify.value(env, json_opts, ctx.stdoutW()) catch return ctx.stdoutErr();
         },
     }
+    ctx.stdoutW().writeByte('\n') catch return ctx.stdoutErr();
+
     try ctx.stdout.flush();
 }
 
