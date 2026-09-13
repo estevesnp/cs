@@ -45,7 +45,7 @@ function M.get_lib_path(root)
 end
 
 ---build cswalk
----@param force boolean?
+---@param force boolean|nil force a rebuild even when lib already exists
 ---@return boolean ok
 function M.build_cswalk(force)
   local root = M.get_repo_root()

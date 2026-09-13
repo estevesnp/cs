@@ -55,6 +55,7 @@ end
 ---@field roots string[]|nil
 ---@field markers string[]|nil
 ---@field continue_on_marker boolean|nil
+---@field max_depth number|nil
 
 ---find projects for roots
 ---@param opts cs.lib.SearchOpts
@@ -77,10 +78,13 @@ function M.search_projects(opts)
   end
 
   local cs_opts = ffi.new("CsSearchOpts")
+
+  ---@diagnostic disable: inject-field
   cs_opts.enable_logging = true
   cs_opts.project_markers = to_c_string_arr(opts.markers)
   cs_opts.markers_count = #opts.markers
   cs_opts.continue_on_marker = opts.continue_on_marker
+  cs_opts.max_depth = opts.max_depth
 
   local result = lib.cs_search_projects(to_c_string_arr(opts.roots), #opts.roots, cs_opts)
   if not result.ok then

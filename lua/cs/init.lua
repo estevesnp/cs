@@ -15,6 +15,7 @@ local cache = {
 ---@field markers string[]
 ---@field preview string
 ---@field continue_on_marker boolean
+---@field max_depth number
 
 ---@return cs.Env|nil
 local function get_cs_env()
@@ -49,6 +50,7 @@ local default_opts = {
   roots = {},
   markers = { ".git", ".jj" },
   continue_on_marker = false,
+  max_depth = 5,
   action = "open",
   prompt = "choose a project> ",
 }
@@ -74,6 +76,7 @@ local function get_env_opts()
       preview = config.preview or default_opts.preview,
       roots = env.roots or default_opts.roots,
       markers = config.markers or default_opts.markers,
+      max_depth = config.max_depth or default_opts.max_depth,
       action = default_opts.action,
       prompt = default_opts.prompt,
     }
@@ -117,16 +120,25 @@ local action_cb_map = {
 ---@field roots string[]
 ---@field markers string[]
 ---@field continue_on_marker boolean
+---@field max_depth number
 ---@field preview string
 ---@field action cs.Action
 ---@field prompt string
 
 ---@class cs.SearchOpts
+---dirs to start searching for projects from
 ---@field roots string[]|nil
+---markers to determine if a dir is a project
 ---@field markers string[]|nil
+---continue searching root after finding a marker
 ---@field continue_on_marker boolean|nil
+---max depth for each root when searching for a project
+---@field max_depth number|nil
+---fzf preview template. e.g.: ls {}
 ---@field preview string|nil
+---action to perform on selected project
 ---@field action cs.Action|nil
+---fzf prompt
 ---@field prompt string|nil
 
 ---@alias cs.Action "open" | "vsplit" | "tab" | "cd"

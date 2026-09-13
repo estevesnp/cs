@@ -170,6 +170,7 @@ require("cs").setup({
   roots = {},
   markers = { ".git", ".jj" },
   continue_on_marker = false,
+  max_depth = 5,
 
   -- options not fetched from `cs env --full`
   action = "open",
