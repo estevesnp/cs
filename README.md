@@ -272,7 +272,7 @@ search:
                               to any project, instantly selects it
 
   flags:
-    -S, --strategy <strat>    strategy for how to search for projects.
+    -s, --strategy <strat>    strategy for how to search for projects.
                               concurrent: search for projects and attempt to
                                           match while also displaying paths
                                           inside fzf
@@ -293,10 +293,11 @@ search:
                               can pass multiple markers by repeating the flag.
                               e.g.: cs search -m .git -m build.zig
 
-    -s, --marker-stop         stop iterating a directory when a marker is found.
+    -c, --continue            continue iterating a directory when a marker is
+                              found
 
-    -c, --marker-continue     continue iterating a directory when a marker is
-                              found. opposite of --marker-stop
+    --no-continue             stop iterating a directory when a marker is found.
+                              opposite of --continue
 
     -d, --max-depth <depth>   how many directories deep to search for in each
                               root. defaults to 5

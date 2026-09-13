@@ -133,7 +133,7 @@ const usage =
     \\                              to any project, instantly selects it
     \\
     \\  flags:
-    \\    -S, --strategy <strat>    strategy for how to search for projects.
+    \\    -s, --strategy <strat>    strategy for how to search for projects.
     \\                              concurrent: search for projects and attempt to
     \\                                          match while also displaying paths
     \\                                          inside fzf
@@ -154,10 +154,11 @@ const usage =
     \\                              can pass multiple markers by repeating the flag.
     \\                              e.g.: cs search -m .git -m build.zig
     \\
-    \\    -s, --marker-stop         stop iterating a directory when a marker is found.
+    \\    -c, --continue            continue iterating a directory when a marker is
+    \\                              found
     \\
-    \\    -c, --marker-continue     continue iterating a directory when a marker is
-    \\                              found. opposite of --marker-stop
+    \\    --no-continue             stop iterating a directory when a marker is found.
+    \\                              opposite of --continue
     \\
     \\    -d, --max-depth <depth>   how many directories deep to search for in each
     \\                              root. defaults to 5
@@ -343,12 +344,12 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
                 continue;
             }
 
-            if (eqlAny(arg, &.{ "--continue-on-marker", "-c" })) {
+            if (eqlAny(arg, &.{ "--continue", "-c" })) {
                 opts.continue_on_marker = true;
                 continue;
             }
 
-            if (eqlAny(arg, &.{ "--stop-on-marker", "-s" })) {
+            if (mem.eql(u8, arg, "--no-continue")) {
                 opts.continue_on_marker = false;
                 continue;
             }
@@ -363,7 +364,7 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
                 continue;
             }
 
-            if (try getNamedArg(w, it, arg, &.{ "--strategy", "-S" })) |named| {
+            if (try getNamedArg(w, it, arg, &.{ "--strategy", "-s" })) |named| {
                 opts.strategy = std.meta.stringToEnum(SearchStrategy, named) orelse
                     return usageError(w, "invalid strategy value: {q}", .{named});
                 continue;
