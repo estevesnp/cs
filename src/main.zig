@@ -202,7 +202,7 @@ const usage =
     \\
     \\  arguments:
     \\    action                    what to do regarding the provided paths.
-    \\                              options: add, remove
+    \\                              options: add (a), remove (rem, r)
     \\
     \\    paths                     paths to perform the action on.
     \\                              when adding, paths must always be provided.
@@ -483,12 +483,16 @@ fn parseRoots(it: *Iter, w: *Io.Writer) CmdError!RootOpts {
                 opts.clear = false;
                 continue;
             }
-            if (std.meta.stringToEnum(RootAction, arg)) |action| {
+            if (eqlAny(arg, &.{ "add", "a" })) {
                 if (opts.action != null) return usageError(w, "duplicate actions provided", .{});
-                opts.action = action;
+                opts.action = .add;
                 continue;
             }
-
+            if (eqlAny(arg, &.{ "remove", "rem", "r" })) {
+                if (opts.action != null) return usageError(w, "duplicate actions provided", .{});
+                opts.action = .remove;
+                continue;
+            }
             if (mem.startsWith(u8, arg, "-")) return usageError(w, "invalid flag: {q}", .{arg});
         }
 

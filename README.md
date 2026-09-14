@@ -341,7 +341,7 @@ roots:
 
   arguments:
     action                    what to do regarding the provided paths.
-                              options: add, remove
+                              options: add (a), remove (rem, r)
 
     paths                     paths to perform the action on.
                               when adding, paths must always be provided.
