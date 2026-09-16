@@ -224,7 +224,7 @@ const usage =
     \\  arguments:
     \\    shell                     shell to print integrations for. if no shell is
     \\                              provided, tries using SHELL from the environment.
-    \\                              supported shells: bash, zsh, fish
+    \\                              supported shells: bash, zsh, fish, nu
     \\
 ;
 
@@ -276,6 +276,7 @@ const Shell = enum {
     bash,
     zsh,
     fish,
+    nu,
 };
 
 const ShellOpts = struct {
@@ -1151,6 +1152,7 @@ fn handleShell(ctx: Ctx, opts: ShellOpts) !void {
     const data = switch (shell) {
         .bash, .zsh => @embedFile("shell-integration/shell.bash.zsh"),
         .fish => @embedFile("shell-integration/shell.fish"),
+        .nu => @embedFile("shell-integration/shell.nu"),
     };
 
     ctx.stdoutW().writeAll(data) catch return ctx.stdoutErr();

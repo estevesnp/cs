@@ -235,6 +235,13 @@ eval "$(cs shell bash)"
 cs shell fish | source
 ```
 
+- nushell
+
+```nu
+mkdir ($nu.default-config-dir | path join "autoload")
+cs shell nu | save -f ($nu.default-config-dir | path join "autoload" "_cs_integration.nu")
+```
+
 ## tmux integration
 
 here are some useful binds to display a popup window with cs:
@@ -363,5 +370,5 @@ shell:
   arguments:
     shell                     shell to print integrations for. if no shell is
                               provided, tries using SHELL from the environment.
-                              supported shells: bash, zsh, fish
+                              supported shells: bash, zsh, fish, nu
 ```
