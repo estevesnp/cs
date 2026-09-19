@@ -148,11 +148,18 @@ fn parseFile(
         error.FileNotFound => return null,
         else => |e| return e,
     };
-    return std.json.parseFromSliceLeaky(T, arena, data, .{ .ignore_unknown_fields = true }) catch |err|
+
+    var scanner: std.json.Scanner = .initCompleteInput(arena, data);
+    defer scanner.deinit();
+
+    var diag: std.json.Diagnostics = .{};
+    scanner.enableDiagnostics(&diag);
+
+    return std.json.parseFromTokenSourceLeaky(T, arena, &scanner, .{ .ignore_unknown_fields = true }) catch |err|
         switch (err) {
             error.OutOfMemory => |e| return e,
             else => |e| {
-                try reporter.print("invalid json file {q} ({t})\n", .{ filename, e });
+                try reporter.print("invalid json file {q}: {t} ({d}:{d})\n", .{ filename, e, diag.getLine(), diag.getColumn() });
                 try reporter.flush();
                 return null;
             },
