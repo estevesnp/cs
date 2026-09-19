@@ -154,14 +154,23 @@ const usage =
     \\                              can pass multiple markers by repeating the flag.
     \\                              e.g.: cs search -m .git -m build.zig
     \\
+    \\    -d, --max-depth <depth>   how many directories deep to search for in each
+    \\                              root. defaults to 5
+    \\
     \\    -c, --continue            continue iterating a directory when a marker is
     \\                              found
     \\
     \\    --no-continue             stop iterating a directory when a marker is found.
     \\                              opposite of --continue
     \\
-    \\    -d, --max-depth <depth>   how many directories deep to search for in each
-    \\                              root. defaults to 5
+    \\    -i, --ignore-match        don't skip fzf picker on exact project match.
+    \\                              a match is when the query is the same as a project
+    \\                              name and it is unique between all found projects.
+    \\
+    \\    --no-ignore-match         skip fzf picker on exact project match.
+    \\                              a match is when the query is the same as a project
+    \\                              name and it is unique between all found projects.
+    \\                              opposite of --ignore-match
     \\
     \\    -p, --preview <preview>   preview to use on fzf. e.g.: 'ls {}'
     \\
@@ -248,6 +257,7 @@ const SearchOpts = struct {
     roots: ?[]const []const u8,
     markers: ?[]const []const u8,
     continue_on_marker: ?bool,
+    ignore_exact_match: ?bool,
 };
 
 const ConfigDisplay = enum { full, partial };
@@ -315,6 +325,7 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
         .roots = null,
         .markers = null,
         .continue_on_marker = null,
+        .ignore_exact_match = null,
     };
 
     var roots: std.ArrayList([]const u8) = .empty;
@@ -352,6 +363,16 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
 
             if (mem.eql(u8, arg, "--no-continue")) {
                 opts.continue_on_marker = false;
+                continue;
+            }
+
+            if (eqlAny(arg, &.{ "--ignore-match", "-i" })) {
+                opts.ignore_exact_match = true;
+                continue;
+            }
+
+            if (mem.eql(u8, arg, "--no-ignore-match")) {
+                opts.ignore_exact_match = false;
                 continue;
             }
 
@@ -604,10 +625,11 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
 
     const roots = if (opts.roots) |cli_roots| try resolveRoots(ctx, cli_roots) else config_with_roots.roots;
     const markers = opts.markers orelse config.markers;
-    const stop_on_marker = opts.continue_on_marker orelse config.continue_on_marker;
-    const max_depth = opts.max_depth orelse config.max_depth;
     const preview = opts.preview orelse config.preview;
     const query = opts.query orelse "";
+    const max_depth = opts.max_depth orelse config.max_depth;
+    const stop_on_marker = opts.continue_on_marker orelse config.continue_on_marker;
+    const ignore_on_match = opts.ignore_exact_match orelse config.ignore_exact_match;
 
     const walk_opts: WalkOpts = .{
         .query = query,
@@ -615,6 +637,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
         .markers = markers,
         .continue_on_marker = stop_on_marker,
         .max_depth = max_depth,
+        .ignore_exact_match = ignore_on_match,
     };
 
     // needed for concurrent so that we don't print to screen while fzf is running
@@ -688,7 +711,10 @@ fn searchBlocking(ctx: Ctx, opts: WalkOpts, preview: []const u8) !?[]const u8 {
     const io = ctx.io;
 
     const projects = try searchProjects(io, arena, opts, .stderr, null);
-    if (matchProject(opts.query, projects)) |match| return match;
+
+    if (!opts.ignore_exact_match) {
+        if (matchProject(opts.query, projects)) |match| return match;
+    }
 
     var fzf_proc: FzfProc = undefined;
     try fzf_proc.init(io, preview, opts.query);
@@ -752,6 +778,7 @@ const WalkOpts = struct {
     markers: []const []const u8,
     continue_on_marker: bool,
     max_depth: usize,
+    ignore_exact_match: bool,
 };
 
 const WalkError = error{NoProjectsFound} || walk.SearchError;
@@ -765,9 +792,8 @@ fn walkAndMatch(
 ) WalkError!?[]const u8 {
     const projects = try searchProjects(io, arena, opts, .fromWriter(reporter), project_queue);
 
-    if (projects.len == 0) {
-        return error.NoProjectsFound;
-    }
+    if (projects.len == 0) return error.NoProjectsFound;
+    if (opts.ignore_exact_match) return null;
 
     return matchProject(opts.query, projects);
 }

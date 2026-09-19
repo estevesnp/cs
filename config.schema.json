@@ -13,11 +13,6 @@
       ],
       "description": "identifiers for a project"
     },
-    "continue_on_marker": {
-      "type": "boolean",
-      "default": false,
-      "description": "continue searching dir after finding a marker"
-    },
     "strategy": {
       "type": "string",
       "enum": [
@@ -37,11 +32,6 @@
       "default": "session",
       "description": "what to do when a project is selected"
     },
-    "preview": {
-      "type": "string",
-      "default": "ls {}",
-      "description": "fzf previewer for projects"
-    },
     "edit_mode": {
       "type": "string",
       "enum": [
@@ -51,6 +41,21 @@
       ],
       "default": "config",
       "description": "what to edit with `cs edit`"
+    },
+    "preview": {
+      "type": "string",
+      "default": "ls {}",
+      "description": "fzf previewer for projects"
+    },
+    "continue_on_marker": {
+      "type": "boolean",
+      "default": false,
+      "description": "continue searching dir after finding a marker"
+    },
+    "ignore_exact_match": {
+      "type": "boolean",
+      "default": false,
+      "description": "don't skip fzf on exact project name match"
     }
   }
 }

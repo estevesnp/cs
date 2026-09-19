@@ -311,14 +311,23 @@ search:
                               can pass multiple markers by repeating the flag.
                               e.g.: cs search -m .git -m build.zig
 
+    -d, --max-depth <depth>   how many directories deep to search for in each
+                              root. defaults to 5
+
     -c, --continue            continue iterating a directory when a marker is
                               found
 
     --no-continue             stop iterating a directory when a marker is found.
                               opposite of --continue
 
-    -d, --max-depth <depth>   how many directories deep to search for in each
-                              root. defaults to 5
+    -i, --ignore-match        don't skip fzf picker on exact project match.
+                              a match is when the query is the same as a project
+                              name and it is unique between all found projects.
+
+    --no-ignore-match         skip fzf picker on exact project match.
+                              a match is when the query is the same as a project
+                              name and it is unique between all found projects.
+                              opposite of --ignore-match
 
     -p, --preview <preview>   preview to use on fzf. e.g.: 'ls {}'
 
