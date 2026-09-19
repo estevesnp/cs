@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "markers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [
+        ".git",
+        ".jj"
+      ],
+      "description": "identifiers for a project"
+    },
+    "continue_on_marker": {
+      "type": "boolean",
+      "default": false,
+      "description": "continue searching dir after finding a marker"
+    },
+    "strategy": {
+      "type": "string",
+      "enum": [
+        "concurrent",
+        "blocking"
+      ],
+      "default": "concurrent",
+      "description": "strategy between walking the filesystem and spawning fzf"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "session",
+        "window",
+        "print"
+      ],
+      "default": "session",
+      "description": "what to do when a project is selected"
+    },
+    "preview": {
+      "type": "string",
+      "default": "ls {}",
+      "description": "fzf previewer for projects"
+    },
+    "edit_mode": {
+      "type": "string",
+      "enum": [
+        "config",
+        "roots",
+        "dir"
+      ],
+      "default": "config",
+      "description": "what to edit with `cs edit`"
+    }
+  }
+}

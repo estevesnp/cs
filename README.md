@@ -194,7 +194,7 @@ example `config.json`:
 
 ```json
 {
-  "project_markers": [".git", ".jj", ".csm"],
+  "markers": [ ".git", ".jj", ".csm" ],
   "preview": "eza {} -a1 --color=always --icons",
   "max_depth": 10
 }
@@ -208,6 +208,17 @@ example `roots.json`:
 
 to see the full config options, you can look at the `config` property of the
 output of `cs env --full`, which contains all default config values
+
+### config schema
+
+optionally, if you have the lsp support for `json-schema`, you can add it to the
+config for autocompletes and validation:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/estevesnp/cs/main/config.schema.json"
+}
+```
 
 ## shell integration
 
