@@ -17,7 +17,7 @@ const SearchStrategy = cfg.SearchStrategy;
 const Action = cfg.Action;
 const EditMode = cfg.EditMode;
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 
 pub fn main(init: process.Init) !void {
     var stdout_buf: [128]u8 = undefined;
