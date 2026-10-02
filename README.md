@@ -4,6 +4,7 @@ cli tool for searching and opening projects in tmux
 
 ## dependencies
 
+- [zig](https://ziglang.org/) 0.17.0 - for compiling `cs`
 - [fzf](https://github.com/junegunn/fzf) - project picker (native support is planned, removing dependency)
 - [tmux](https://github.com/tmux/tmux) - for opening projects in a new tmux session
 
@@ -194,7 +195,7 @@ example `config.json`:
 
 ```json
 {
-  "markers": [ ".git", ".jj", ".csm" ],
+  "markers": [".git", ".jj", ".csm"],
   "preview": "eza {} -a1 --color=always --icons",
   "max_depth": 10
 }
