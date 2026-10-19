@@ -177,15 +177,16 @@ end
 ---search and return projects
 ---@param roots string[]|nil
 function M.list_projects(roots)
+  local opts = vim.deepcopy(get_env_opts())
   roots = roots or {}
-  if #roots == 0 then
-    roots = get_env_opts().roots
+  if #roots > 0 then
+    opts.roots = roots
   end
-  if #roots == 0 then
+  if #opts.roots == 0 then
     log.warn("no roots found")
     return {}
   end
-  return require("cs.lib").search_projects({ roots = roots })
+  return require("cs.lib").search_projects(opts)
 end
 
 ---set default opts. opts from `cs env --full` still override these.
