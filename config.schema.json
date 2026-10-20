@@ -56,6 +56,11 @@
       "type": "boolean",
       "default": false,
       "description": "don't skip fzf on exact project name match"
+    },
+    "fullscreen": {
+      "type": "boolean",
+      "default": false,
+      "description": "fullscreen fzf picker"
     }
   }
 }

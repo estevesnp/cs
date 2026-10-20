@@ -50,6 +50,7 @@ pub const Config = struct {
     strategy: SearchStrategy = if (builtin.single_threaded) .blocking else .concurrent,
     action: Action = .session,
     ignore_exact_match: bool = false,
+    fullscreen: bool = false,
     preview: []const u8 = if (is_windows) "dir {}" else "ls {}",
     edit_mode: EditMode = .config,
 };

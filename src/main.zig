@@ -172,6 +172,11 @@ const usage =
     \\                              name and it is unique between all found projects.
     \\                              opposite of --ignore-match
     \\
+    \\    -f, --fullscreen          fullscreen the fzf picker window.
+    \\
+    \\    --no-fullscreen           don't fullscreen the fzf picker window.
+    \\                              opposite of --fullscreen.
+    \\
     \\    -p, --preview <preview>   preview to use on fzf. e.g.: 'ls {}'
     \\
     \\    --no-preview              equivalent to --preview=''. disables fzf preview
@@ -201,7 +206,7 @@ const usage =
     \\
     \\    -e, --editor              select what editor to open the config with.
     \\                              if none is provided, defaults to the environment:
-    \\                              CS_EDITOR -> VISUAL -> EDITOR
+    \\                              cs_editor -> visual -> editor
     \\
     \\
     \\roots:
@@ -232,7 +237,7 @@ const usage =
     \\
     \\  arguments:
     \\    shell                     shell to print integrations for. if no shell is
-    \\                              provided, tries using SHELL from the environment.
+    \\                              provided, tries using shell from the environment.
     \\                              supported shells: bash, zsh, fish, nu
     \\
 ;
@@ -258,6 +263,7 @@ const SearchOpts = struct {
     markers: ?[]const []const u8,
     continue_on_marker: ?bool,
     ignore_exact_match: ?bool,
+    fullscreen: ?bool,
 };
 
 const ConfigDisplay = enum { full, partial };
@@ -326,6 +332,7 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
         .markers = null,
         .continue_on_marker = null,
         .ignore_exact_match = null,
+        .fullscreen = null,
     };
 
     var roots: std.ArrayList([]const u8) = .empty;
@@ -373,6 +380,16 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
 
             if (mem.eql(u8, arg, "--no-ignore-match")) {
                 opts.ignore_exact_match = false;
+                continue;
+            }
+
+            if (eqlAny(arg, &.{ "--fullscreen", "-f" })) {
+                opts.fullscreen = true;
+                continue;
+            }
+
+            if (mem.eql(u8, arg, "--no-fullscreen")) {
+                opts.fullscreen = false;
                 continue;
             }
 
@@ -630,6 +647,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const max_depth = opts.max_depth orelse config.max_depth;
     const stop_on_marker = opts.continue_on_marker orelse config.continue_on_marker;
     const ignore_on_match = opts.ignore_exact_match orelse config.ignore_exact_match;
+    const fullscreen = opts.fullscreen orelse config.fullscreen;
 
     const walk_opts: WalkOpts = .{
         .query = query,
@@ -638,6 +656,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
         .continue_on_marker = stop_on_marker,
         .max_depth = max_depth,
         .ignore_exact_match = ignore_on_match,
+        .fullscreen = fullscreen,
     };
 
     // needed for concurrent so that we don't print to screen while fzf is running
@@ -717,7 +736,7 @@ fn searchBlocking(ctx: Ctx, opts: WalkOpts, preview: []const u8) !?[]const u8 {
     }
 
     var fzf_proc: FzfProc = undefined;
-    try fzf_proc.init(io, preview, opts.query);
+    try fzf_proc.init(io, preview, opts.query, opts.fullscreen);
 
     for (projects) |project| {
         fzf_proc.stdin.interface.writeAll(project) catch return fzf_proc.stdin.err.?;
@@ -740,7 +759,7 @@ fn searchConcurrent(ctx: Ctx, opts: WalkOpts, preview: []const u8, reporter: *Io
     const io = ctx.io;
 
     var fzf_proc: FzfProc = undefined;
-    try fzf_proc.init(io, preview, opts.query);
+    try fzf_proc.init(io, preview, opts.query, opts.fullscreen);
 
     var queue_buf: [10][]const u8 = undefined;
     var project_queue: Io.Queue([]const u8) = .init(&queue_buf);
@@ -779,6 +798,7 @@ const WalkOpts = struct {
     continue_on_marker: bool,
     max_depth: usize,
     ignore_exact_match: bool,
+    fullscreen: bool,
 };
 
 const WalkError = error{NoProjectsFound} || walk.SearchError;
@@ -866,8 +886,8 @@ const FzfProc = struct {
     stdin_buf: [64]u8 = undefined,
     stdout_buf: [Io.Dir.max_path_bytes + 1]u8 = undefined,
 
-    fn init(self: *FzfProc, io: Io, preview: []const u8, query: []const u8) FzfSpawnError!void {
-        const proc = try spawnFzf(io, preview, query);
+    fn init(self: *FzfProc, io: Io, preview: []const u8, query: []const u8, fullscreen: bool) FzfSpawnError!void {
+        const proc = try spawnFzf(io, preview, query, fullscreen);
 
         self.* = .{
             .proc = proc,
@@ -881,13 +901,16 @@ const FzfProc = struct {
 
 const FzfSpawnError = error{FzfNotFound} || process.SpawnError;
 
-fn spawnFzf(io: Io, preview: []const u8, query: []const u8) !process.Child {
+fn spawnFzf(io: Io, preview: []const u8, query: []const u8, fullscreen: bool) !process.Child {
+    const height = if (fullscreen) "100%" else "40%";
     return process.spawn(io, .{
         .argv = &.{
             "fzf",
             "--header=choose a project",
             "--reverse",
             "--scheme=path",
+            "--height",
+            height,
             "--preview-label=[ project files ]",
             "--preview",
             preview,

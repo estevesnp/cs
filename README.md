@@ -259,8 +259,8 @@ cs shell nu | save -f ($nu.default-config-dir | path join "autoload" "_cs_integr
 here are some useful binds to display a popup window with cs:
 
 ```tmux
-bind C-o display-popup -E "cs search --session --no-preview"
-bind C-w display-popup -E "cs search --window --no-preview"
+bind C-o display-popup -E "cs search --session --fullscreen --no-preview"
+bind C-w display-popup -E "cs search --window --fullscreen --no-preview"
 ```
 
 ## usage
