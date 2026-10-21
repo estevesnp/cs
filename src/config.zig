@@ -37,6 +37,12 @@ pub const Action = enum {
     print,
 };
 
+pub const MatchMode = enum {
+    auto,
+    force,
+    ignore,
+};
+
 pub const EditMode = enum {
     config,
     roots,
@@ -49,7 +55,7 @@ pub const Config = struct {
     max_depth: usize = walk.default_max_depth,
     strategy: SearchStrategy = if (builtin.single_threaded) .blocking else .concurrent,
     action: Action = .session,
-    ignore_exact_match: bool = false,
+    match: MatchMode = .auto,
     fullscreen: bool = false,
     preview: []const u8 = if (is_windows) "dir {}" else "ls {}",
     edit_mode: EditMode = .config,

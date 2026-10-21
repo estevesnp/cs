@@ -14,6 +14,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const SearchStrategy = cfg.SearchStrategy;
+const MatchMode = cfg.MatchMode;
 const Action = cfg.Action;
 const EditMode = cfg.EditMode;
 
@@ -146,6 +147,17 @@ const usage =
     \\                              the option can be chosen directly, e.g. --print
     \\                              options: session, window, print
     \\
+    \\    --match <mode>            how to handle an exact project match.
+    \\                              a match is when the query is the same as a project
+    \\                              name and it is unique between all found projects.
+    \\                              auto:   skip the fzf picker on an exact match
+    \\                              ignore: never skip the fzf picker, only pre-fill
+    \\                                      its query
+    \\                              force:  never spawn fzf. errors if there is no
+    \\                                      query or no exact match. --strategy,
+    \\                                      --preview and --fullscreen are ignored
+    \\                              options: auto (default), ignore, force
+    \\
     \\    -r, --root <root> ...     set which roots to search from.
     \\                              can pass multiple roots by repeating the flag.
     \\                              e.g.: cs search -r . -r ../dir
@@ -162,15 +174,6 @@ const usage =
     \\
     \\    --no-continue             stop iterating a directory when a marker is found.
     \\                              opposite of --continue
-    \\
-    \\    -i, --ignore-match        don't skip fzf picker on exact project match.
-    \\                              a match is when the query is the same as a project
-    \\                              name and it is unique between all found projects.
-    \\
-    \\    --no-ignore-match         skip fzf picker on exact project match.
-    \\                              a match is when the query is the same as a project
-    \\                              name and it is unique between all found projects.
-    \\                              opposite of --ignore-match
     \\
     \\    -f, --fullscreen          fullscreen the fzf picker window.
     \\
@@ -259,10 +262,10 @@ const SearchOpts = struct {
     max_depth: ?usize,
     strategy: ?SearchStrategy,
     action: ?Action,
+    match: ?MatchMode,
     roots: ?[]const []const u8,
     markers: ?[]const []const u8,
     continue_on_marker: ?bool,
-    ignore_exact_match: ?bool,
     fullscreen: ?bool,
 };
 
@@ -328,10 +331,10 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
         .max_depth = null,
         .strategy = null,
         .action = null,
+        .match = null,
         .roots = null,
         .markers = null,
         .continue_on_marker = null,
-        .ignore_exact_match = null,
         .fullscreen = null,
     };
 
@@ -373,16 +376,6 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
                 continue;
             }
 
-            if (eqlAny(arg, &.{ "--ignore-match", "-i" })) {
-                opts.ignore_exact_match = true;
-                continue;
-            }
-
-            if (mem.eql(u8, arg, "--no-ignore-match")) {
-                opts.ignore_exact_match = false;
-                continue;
-            }
-
             if (eqlAny(arg, &.{ "--fullscreen", "-f" })) {
                 opts.fullscreen = true;
                 continue;
@@ -412,6 +405,12 @@ fn parseSearch(it: *Iter, w: *Io.Writer, arena: Allocator) CmdError!SearchOpts {
             if (try getNamedArg(w, it, arg, &.{ "--action", "-a" })) |named| {
                 opts.action = std.meta.stringToEnum(Action, named) orelse
                     return usageError(w, "invalid action value: {q}", .{named});
+                continue;
+            }
+
+            if (try getNamedArg(w, it, arg, &.{"--match"})) |named| {
+                opts.match = std.meta.stringToEnum(MatchMode, named) orelse
+                    return usageError(w, "invalid match value: {q}", .{named});
                 continue;
             }
 
@@ -645,17 +644,17 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const preview = opts.preview orelse config.preview;
     const query = opts.query orelse "";
     const max_depth = opts.max_depth orelse config.max_depth;
-    const stop_on_marker = opts.continue_on_marker orelse config.continue_on_marker;
-    const ignore_on_match = opts.ignore_exact_match orelse config.ignore_exact_match;
+    const continue_on_marker = opts.continue_on_marker orelse config.continue_on_marker;
+    const match_mode = opts.match orelse config.match;
     const fullscreen = opts.fullscreen orelse config.fullscreen;
 
     const walk_opts: WalkOpts = .{
         .query = query,
         .roots = roots,
         .markers = markers,
-        .continue_on_marker = stop_on_marker,
+        .continue_on_marker = continue_on_marker,
         .max_depth = max_depth,
-        .ignore_exact_match = ignore_on_match,
+        .match = match_mode,
         .fullscreen = fullscreen,
     };
 
@@ -663,10 +662,20 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     var walk_reporter: Io.Writer.Allocating = .init(arena);
 
     const strategy = opts.strategy orelse config.strategy;
-    const selection_err_union = switch (strategy) {
-        .concurrent => searchConcurrent(ctx, walk_opts, preview, &walk_reporter.writer),
-        .blocking => searchBlocking(ctx, walk_opts, preview),
-    };
+
+    const selection_err_union =
+        switch (match_mode) {
+            .force => searchForceMatch(ctx, walk_opts) catch |err| switch (err) {
+                error.NoMatch => try ctx.exit("no exact match found for query {q}", .{walk_opts.query}),
+                error.NoQuery => try ctx.exit("no project query provided", .{}),
+                error.NoProjectsFound => try ctx.exit("no projects found", .{}),
+                else => |e| return e,
+            },
+            .auto, .ignore => switch (strategy) {
+                .concurrent => searchConcurrent(ctx, walk_opts, preview, &walk_reporter.writer),
+                .blocking => searchBlocking(ctx, walk_opts, preview),
+            },
+        };
 
     try ctx.report(walk_reporter.written());
 
@@ -725,13 +734,25 @@ fn resolveRoots(ctx: Ctx, cli_roots: []const []const u8) ![]const []const u8 {
     return roots;
 }
 
+const SearchMatchError = WalkError || error{ NoQuery, NoMatch };
+
+fn searchForceMatch(ctx: Ctx, opts: WalkOpts) SearchMatchError![]const u8 {
+    const arena = ctx.arena;
+    const io = ctx.io;
+
+    if (opts.query.len == 0) return error.NoQuery;
+
+    const projects = try searchProjects(io, arena, opts, .stderr, null);
+    return matchProject(opts.query, projects) orelse error.NoMatch;
+}
+
 fn searchBlocking(ctx: Ctx, opts: WalkOpts, preview: []const u8) !?[]const u8 {
     const arena = ctx.arena;
     const io = ctx.io;
 
     const projects = try searchProjects(io, arena, opts, .stderr, null);
 
-    if (!opts.ignore_exact_match) {
+    if (opts.match != .ignore) {
         if (matchProject(opts.query, projects)) |match| return match;
     }
 
@@ -797,7 +818,7 @@ const WalkOpts = struct {
     markers: []const []const u8,
     continue_on_marker: bool,
     max_depth: usize,
-    ignore_exact_match: bool,
+    match: MatchMode,
     fullscreen: bool,
 };
 
@@ -811,10 +832,7 @@ fn walkAndMatch(
     project_queue: ?*Io.Queue([]const u8),
 ) WalkError!?[]const u8 {
     const projects = try searchProjects(io, arena, opts, .fromWriter(reporter), project_queue);
-
-    if (projects.len == 0) return error.NoProjectsFound;
-    if (opts.ignore_exact_match) return null;
-
+    if (opts.match == .ignore) return null;
     return matchProject(opts.query, projects);
 }
 
@@ -824,7 +842,7 @@ fn searchProjects(
     opts: WalkOpts,
     reporter: walk.Reporter,
     project_queue: ?*Io.Queue([]const u8),
-) walk.SearchError![]const []const u8 {
+) WalkError![]const []const u8 {
     const project_set = try walk.searchProjects(arena, io, opts.roots, .{
         .reporter = reporter,
         .queue = project_queue,
@@ -832,6 +850,7 @@ fn searchProjects(
         .continue_on_marker = opts.continue_on_marker,
         .max_depth = @intCast(opts.max_depth),
     });
+    if (project_set.count() == 0) return error.NoProjectsFound;
     return project_set.keys();
 }
 
