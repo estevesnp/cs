@@ -40,7 +40,7 @@
         "force"
       ],
       "default": "auto",
-      "description": "exact project name match handling"
+      "description": "how to handle a query's exact match with the project name"
     },
     "edit_mode": {
       "type": "string",

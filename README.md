@@ -304,15 +304,14 @@ search:
                               the option can be chosen directly, e.g. --print
                               options: session, window, print
 
-    --match <mode>            how to handle an exact project match.
+    --match <mode>            how to handle an exact project match for a query.
                               a match is when the query is the same as a project
                               name and it is unique between all found projects.
                               auto:   skip the fzf picker on an exact match
                               ignore: never skip the fzf picker, only pre-fill
                                       its query
                               force:  never spawn fzf. errors if there is no
-                                      query or no exact match. --strategy,
-                                      --preview and --fullscreen are ignored
+                                      exact match
                               options: auto (default), ignore, force
 
     -r, --root <root> ...     set which roots to search from.

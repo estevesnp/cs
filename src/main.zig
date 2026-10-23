@@ -147,15 +147,14 @@ const usage =
     \\                              the option can be chosen directly, e.g. --print
     \\                              options: session, window, print
     \\
-    \\    --match <mode>            how to handle an exact project match.
+    \\    --match <mode>            how to handle an exact project match for a query.
     \\                              a match is when the query is the same as a project
     \\                              name and it is unique between all found projects.
     \\                              auto:   skip the fzf picker on an exact match
     \\                              ignore: never skip the fzf picker, only pre-fill
     \\                                      its query
     \\                              force:  never spawn fzf. errors if there is no
-    \\                                      query or no exact match. --strategy,
-    \\                                      --preview and --fullscreen are ignored
+    \\                                      exact match
     \\                              options: auto (default), ignore, force
     \\
     \\    -r, --root <root> ...     set which roots to search from.
@@ -209,7 +208,7 @@ const usage =
     \\
     \\    -e, --editor              select what editor to open the config with.
     \\                              if none is provided, defaults to the environment:
-    \\                              cs_editor -> visual -> editor
+    \\                              CS_EDITOR -> VISUAL -> EDITOR
     \\
     \\
     \\roots:
@@ -240,7 +239,7 @@ const usage =
     \\
     \\  arguments:
     \\    shell                     shell to print integrations for. if no shell is
-    \\                              provided, tries using shell from the environment.
+    \\                              provided, tries using SHELL from the environment.
     \\                              supported shells: bash, zsh, fish, nu
     \\
 ;
@@ -662,20 +661,18 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     var walk_reporter: Io.Writer.Allocating = .init(arena);
 
     const strategy = opts.strategy orelse config.strategy;
+    const force_match = match_mode == .force and query.len > 0;
 
-    const selection_err_union =
-        switch (match_mode) {
-            .force => searchForceMatch(ctx, walk_opts) catch |err| switch (err) {
-                error.NoMatch => try ctx.exit("no exact match found for query {q}", .{walk_opts.query}),
-                error.NoQuery => try ctx.exit("no project query provided", .{}),
-                error.NoProjectsFound => try ctx.exit("no projects found", .{}),
-                else => |e| return e,
-            },
-            .auto, .ignore => switch (strategy) {
-                .concurrent => searchConcurrent(ctx, walk_opts, preview, &walk_reporter.writer),
-                .blocking => searchBlocking(ctx, walk_opts, preview),
-            },
-        };
+    const selection_err_union = if (force_match)
+        searchForceMatch(ctx, walk_opts) catch |err| switch (err) {
+            error.NoMatch => try ctx.exit("no exact match found for query {q}", .{walk_opts.query}),
+            error.NoProjectsFound => try ctx.exit("no projects found", .{}),
+            else => |e| return e,
+        }
+    else switch (strategy) {
+        .concurrent => searchConcurrent(ctx, walk_opts, preview, &walk_reporter.writer),
+        .blocking => searchBlocking(ctx, walk_opts, preview),
+    };
 
     try ctx.report(walk_reporter.written());
 
@@ -734,13 +731,13 @@ fn resolveRoots(ctx: Ctx, cli_roots: []const []const u8) ![]const []const u8 {
     return roots;
 }
 
-const SearchMatchError = WalkError || error{ NoQuery, NoMatch };
+const SearchMatchError = WalkError || error{NoMatch};
 
 fn searchForceMatch(ctx: Ctx, opts: WalkOpts) SearchMatchError![]const u8 {
     const arena = ctx.arena;
     const io = ctx.io;
 
-    if (opts.query.len == 0) return error.NoQuery;
+    assert(opts.query.len > 0);
 
     const projects = try searchProjects(io, arena, opts, .stderr, null);
     return matchProject(opts.query, projects) orelse error.NoMatch;
