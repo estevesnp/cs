@@ -676,12 +676,12 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
 
     try ctx.report(walk_reporter.written());
 
-    const selection = selection_err_union catch |err|
+    const selection = (selection_err_union catch |err|
         switch (err) {
             error.NoProjectsFound => try ctx.exit("no projects found", .{}),
             error.FzfNotFound => try ctx.exit("fzf binary not found in path", .{}),
             else => |e| return e,
-        } orelse return;
+        }) orelse return;
 
     const action = opts.action orelse config.action;
     switch (action) {
