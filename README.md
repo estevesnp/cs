@@ -275,7 +275,7 @@ subcommands:
   search                      search for project
   env                         print config and environment information
   edit                        edit config
-  roots                       add or remove paths to roots. also accepts 'root'
+  roots                       add or remove paths to roots. accepts alias 'root'
   shell                       print shell integrations
   version                     print version. also accepts --version and -v
   help                        print this message. also accepts --help and -h
@@ -371,18 +371,19 @@ edit:
 roots:
   description: add or remove the paths that are configured as roots
 
-  usage: cs roots [action] [flags] [paths]
+  usage: cs root[s] [flags] [paths]
 
   arguments:
-    action                    what to do regarding the provided paths.
-                              options: add (a), remove (rem, r)
-
     paths                     paths to perform the action on.
                               when adding, paths must always be provided.
                               when removing, paths must be provided unless the
                               --clear flag is provided.
 
   flags:
+    -a, --add                 add the selected paths from roots. default
+
+    -r, --remove              remove the selected paths from roots
+
     -c, --clear               remove all paths before performing an action.
                               can be used with 'remove' to clear out all roots
 
