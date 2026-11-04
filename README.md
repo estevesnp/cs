@@ -226,6 +226,7 @@ config for autocompletes and validation:
 current shell integrations:
 
 - `csd` - cd to chosen project using `cs search --print`
+  - the function can be renamed by pasing the `--csd <name>` flag
 
 ### setting up shell integration
 
@@ -380,7 +381,7 @@ roots:
                               --clear flag is provided.
 
   flags:
-    -a, --add                 add the selected paths from roots. default
+    -a, --add                 add the selected paths from roots. default option
 
     -r, --remove              remove the selected paths from roots
 
@@ -393,10 +394,14 @@ roots:
 shell:
   description: print shell integrations using cs to embed in scripts
 
-  usage : cs shell [shell]
+  usage:  cs shell [shell] [flags]
 
   arguments:
     shell                     shell to print integrations for. if no shell is
                               provided, tries using SHELL from the environment.
                               supported shells: bash, zsh, fish, nu
+
+  flags:
+    --csd <name>              rename function to cd to cs selection
+
 ```

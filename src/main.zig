@@ -223,7 +223,7 @@ const usage =
     \\                              --clear flag is provided.
     \\
     \\  flags:
-    \\    -a, --add                 add the selected paths from roots. default
+    \\    -a, --add                 add the selected paths from roots. default option
     \\
     \\    -r, --remove              remove the selected paths from roots
     \\
@@ -236,12 +236,15 @@ const usage =
     \\shell:
     \\  description: print shell integrations using cs to embed in scripts
     \\
-    \\  usage : cs shell [shell]
+    \\  usage:  cs shell [shell] [flags]
     \\
     \\  arguments:
     \\    shell                     shell to print integrations for. if no shell is
     \\                              provided, tries using SHELL from the environment.
     \\                              supported shells: bash, zsh, fish, nu
+    \\
+    \\  flags:
+    \\    --csd <name>              rename function to cd to cs selection
     \\
 ;
 
@@ -300,6 +303,7 @@ const Shell = enum {
 
 const ShellOpts = struct {
     shell: ?Shell,
+    csd_name: ?[]const u8,
 };
 
 fn parseArgs(arena: Allocator, w: *Io.Writer, args: []const []const u8) CmdError!Cmd {
@@ -544,10 +548,16 @@ fn parseRoots(it: *Iter, w: *Io.Writer) CmdError!RootOpts {
 fn parseShell(it: *Iter, w: *Io.Writer) CmdError!ShellOpts {
     var opts: ShellOpts = .{
         .shell = null,
+        .csd_name = null,
     };
 
     while (it.next()) |arg| {
         if (eqlAny(arg, &.{ "help", "--help", "-h" })) return CmdError.Help;
+
+        if (try getNamedArg(w, it, arg, &.{"--csd"})) |named| {
+            opts.csd_name = named;
+            continue;
+        }
 
         if (opts.shell != null) return usageError(w, "multiple shells provided", .{});
 
@@ -1213,13 +1223,23 @@ fn handleShell(ctx: Ctx, opts: ShellOpts) !void {
         determineShell(ctx.environ_map) orelse
         try ctx.exit("could not determine shell. provide one after the 'shell' subcommand", .{});
 
-    const data = switch (shell) {
-        .bash, .zsh => @embedFile("shell-integration/shell.bash.zsh"),
-        .fish => @embedFile("shell-integration/shell.fish"),
-        .nu => @embedFile("shell-integration/shell.nu"),
+    const csd_name = opts.csd_name orelse "csd";
+
+    const template = switch (shell) {
+        .bash, .zsh => @embedFile("data/csd.bash.zsh"),
+        .fish => @embedFile("data/csd.fish"),
+        .nu => @embedFile("data/csd.nu"),
     };
 
-    ctx.stdoutW().writeAll(data) catch return ctx.stdoutErr();
+    const function_placeholder = "PLACEHOLDERNAME";
+    var it = mem.splitSequence(u8, template, function_placeholder);
+
+    ctx.stdoutW().writeAll(it.next().?) catch return ctx.stdoutErr();
+    while (it.next()) |seq| {
+        ctx.stdoutW().writeAll(csd_name) catch return ctx.stdoutErr();
+        ctx.stdoutW().writeAll(seq) catch return ctx.stdoutErr();
+    }
+
     try ctx.stdout.flush();
 }
 

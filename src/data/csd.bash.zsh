@@ -1,4 +1,4 @@
-csd() {
+PLACEHOLDERNAME() {
   local cspath
   cspath=$(cs search --print "$@") || return
   [ -n "$cspath" ] || return
