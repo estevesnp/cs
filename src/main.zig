@@ -1094,7 +1094,7 @@ fn editConfig(ctx: Ctx, opts: EditOpts) !void {
     defer proc.kill(io);
 
     const term = try proc.wait(io);
-    if (term.success()) return;
+    if (term.eql(.success)) return;
 
     const stderr = ctx.stderrW();
     stderr.print("bad termination while editing: {s} ", .{editor}) catch
