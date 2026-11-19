@@ -167,7 +167,7 @@ fn parseFile(
         switch (err) {
             error.OutOfMemory => |e| return e,
             else => |e| {
-                try reporter.print("invalid json file {q}: {t} ({d}:{d})\n", .{ filename, e, diag.getLine(), diag.getColumn() });
+                try diag.dump(reporter, e, filename);
                 try reporter.flush();
                 return null;
             },
