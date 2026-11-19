@@ -144,8 +144,9 @@ const usage =
     \\                              options: concurrent (default), blocking
     \\
     \\    -a, --action <action>     select action to perform on project selection.
+    \\                              'list' prints all matches, skipping selection.
     \\                              the option can be chosen directly, e.g. --print
-    \\                              options: session, window, print
+    \\                              options: session, window, print, list
     \\
     \\    --match <mode>            how to handle an exact project match for a query.
     \\                              a match is when the query is the same as a project
@@ -647,6 +648,7 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
     const config_with_roots = try cfg.readConfigWithRoots(io, arena, ctx.environ_map, ctx.stderrW());
     const config = cfg.normalizeConfig(config_with_roots.config);
 
+    const action = opts.action orelse config.action;
     const roots = if (opts.roots) |cli_roots| try resolveRoots(ctx, cli_roots) else config_with_roots.roots;
     const markers = opts.markers orelse config.markers;
     const preview = opts.preview orelse config.preview;
@@ -665,6 +667,19 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
         .match = match_mode,
         .fullscreen = fullscreen,
     };
+
+    if (action == .list) {
+        const projects = searchProjects(io, arena, walk_opts, .stderr, null) catch |err| switch (err) {
+            error.NoProjectsFound => try ctx.exit("no projects found", .{}),
+            else => |e| return e,
+        };
+        for (projects) |project| {
+            ctx.stdoutW().writeAll(project) catch return ctx.stdoutErr();
+            ctx.stdoutW().writeByte('\n') catch return ctx.stdoutErr();
+        }
+        try ctx.stdout.flush();
+        return;
+    }
 
     // needed for concurrent so that we don't print to screen while fzf is running
     var walk_reporter: Io.Writer.Allocating = .init(arena);
@@ -692,8 +707,8 @@ fn search(ctx: Ctx, opts: SearchOpts) !void {
             else => |e| return e,
         }) orelse return;
 
-    const action = opts.action orelse config.action;
     switch (action) {
+        .list => unreachable, // handled manually above
         .print => {
             ctx.stdoutW().writeAll(selection) catch return ctx.stdoutErr();
             if (try ctx.stdout.file.isTty(io))

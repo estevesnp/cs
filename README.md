@@ -302,8 +302,9 @@ search:
                               options: concurrent (default), blocking
 
     -a, --action <action>     select action to perform on project selection.
+                              'list' prints all matches, skipping selection.
                               the option can be chosen directly, e.g. --print
-                              options: session, window, print
+                              options: session, window, print, list
 
     --match <mode>            how to handle an exact project match for a query.
                               a match is when the query is the same as a project
@@ -403,5 +404,4 @@ shell:
 
   flags:
     --csd <name>              rename function to cd to cs selection
-
 ```

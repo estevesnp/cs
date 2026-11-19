@@ -35,6 +35,7 @@ pub const Action = enum {
     session,
     window,
     print,
+    list,
 };
 
 pub const MatchMode = enum {
