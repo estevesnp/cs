@@ -29,8 +29,6 @@ const CsHandle = struct {
 
 const allocator = if (builtin.link_libc)
     std.heap.c_allocator
-else if (!builtin.single_threaded)
-    std.heap.smp_allocator
 else
     std.heap.page_allocator;
 
