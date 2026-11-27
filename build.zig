@@ -7,8 +7,8 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const use_llvm = b.option(bool, "llvm", "use llvm for executable");
-    const link_libc = b.option(bool, "libc", "link libc");
+    const use_llvm = b.option(bool, "llvm", "use llvm for executable, lib and tests");
+    const link_libc = b.option(bool, "libc", "link libc for executable, lib and tests");
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
