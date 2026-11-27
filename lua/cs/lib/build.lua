@@ -46,8 +46,9 @@ end
 
 ---build cswalk
 ---@param force boolean|nil force a rebuild even when lib already exists
+---@param build_args string[]? optional build args
 ---@return boolean ok
-function M.build_cswalk(force)
+function M.build_cswalk(force, build_args)
   local root = M.get_repo_root()
   local lib_path = M.get_lib_path(root)
 
@@ -57,7 +58,7 @@ function M.build_cswalk(force)
 
   log.info("building cswalk...")
 
-  local build_args = { "zig", "build", "lib", "-Doptimize=ReleaseSafe" }
+  build_args = build_args or { "zig", "build", "lib", "-Doptimize=safe" }
   local ok, system_res = pcall(vim.system, build_args, { cwd = root })
   if not ok then
     log.error("error building cswalk: %s", system_res)
