@@ -7,10 +7,14 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const use_llvm = b.option(bool, "llvm", "use llvm for executable");
+    const link_libc = b.option(bool, "libc", "link libc");
+
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = link_libc,
     });
 
     const options = b.addOptions();
@@ -20,7 +24,7 @@ pub fn build(b: *std.Build) !void {
     const exe = b.addExecutable(.{
         .name = "cs",
         .root_module = mod,
-        .use_llvm = b.option(bool, "llvm", "use llvm for executable"),
+        .use_llvm = use_llvm,
     });
 
     b.installArtifact(exe);
@@ -36,15 +40,18 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/walk/lib.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = link_libc,
     });
 
     const lib = b.addLibrary(.{
         .name = "cswalk",
         .linkage = .dynamic,
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/walk/ffi/cswalk.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = link_libc,
             .imports = &.{.{ .name = "walk", .module = walk_mod }},
         }),
     });
@@ -56,10 +63,12 @@ pub fn build(b: *std.Build) !void {
     const filters = b.option([]const []const u8, "test-filter", "test filters") orelse &.{};
     const exe_tests = b.addTest(.{
         .filters = filters,
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tests.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = link_libc,
         }),
     });
 
